@@ -3304,7 +3304,7 @@ classdef Labeler < handle
     
     function updateShowTrx(obj)
       % Update .hTrx, .hTraj based on .trx, .showTrx*, .currFrame
-      
+
       if ~obj.hasTrx
         return;
       end
@@ -4193,13 +4193,32 @@ classdef Labeler < handle
         dd = dir(fullfile(movdir,trkpat));
         trkfilesAllShort = {dd.name}';
         trkfilesAll{i} = cellfun(@(x)fullfile(movdir,x),trkfilesAllShort,'uni',0);
-        
+            
         trkpatRE = sprintf('%s(?<kw>.*).trk',movname);
         re = regexp(trkfilesAllShort,trkpatRE,'names');
         re = cellfun(@(x)x.kw,re,'uni',0);
         keywords{i} = re;
         
         assert(numel(trkfilesAll{i})==numel(keywords{i}));
+      end
+      
+      
+      %if some of 'videos' are of type poseNetHeatmap.  There will be no
+      %associated .trk files as these heatmaps are just contextual info about the actual videos.  
+      %For heatmaps just duplicating .trk files from actual videos so
+      %tracking can be superimposed on heatmaps.
+      for i=1:numel(movfiles)
+          if strcmp(obj.movieReader(i).info.type,'poseNetHeatmap') && isempty(trkfilesAll{i})
+                %MASSIVE ASSUMPTION!!!: Assumeing that videos/heatmaps are
+                %loaded in sequential order i.e.: video view 1, video view
+                %2, heatmap view 1, heatmap view 2.
+                trkfilesAll{i} = trkfilesAll{i-(numel(movfiles)/2)};
+                keywords{i}= keywords{i-(numel(movfiles)/2)};
+                
+                if isempty(trkfilesAll{i-(numel(movfiles)/2)})
+                    warning('Unable to duplicate .trk data for heatmaps. Heatmap loading assumes videos are added to project in this order: video view 1, video view 2, heatmap view 1, heatmap view 2 etc.')
+                end
+          end
       end
       
       % Find common keywords
@@ -8018,7 +8037,19 @@ classdef Labeler < handle
       iMov = obj.currMovie;
       frm = obj.currFrame;
       iTgt = obj.currTarget;      
-      lpos2 = obj.labeledpos2GTaware{iMov}(:,:,frm,iTgt);
+      lpos2 = obj.labeledpos2GTaware{iMov}(:,:,frm,iTgt)
+      
+      %scaling points if they are to be displayed on a poseTF heatmap as heatmaps
+      %are /2 size of video
+      nViews = obj.nview;
+      nPtsPerView = obj.nLabelPoints/nViews;
+      for currView = 1:nViews
+          if strcmp(obj.movieReader(currView).info.type,'poseNetHeatmap')
+              ptsThisView = ((currView-1)*nPtsPerView)+1 : (currView*nPtsPerView);
+              lpos2(ptsThisView,:)=lpos2(ptsThisView,:)./2;
+          end
+      end
+      
       txtOffset = obj.labelPointsPlotInfo.LblOffset;
       LabelCore.setPtsCoordsStc(lpos2,obj.labeledpos2_ptsH,...
         obj.labeledpos2_ptsTxtH,txtOffset);
