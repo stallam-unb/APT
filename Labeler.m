@@ -206,7 +206,7 @@ classdef Labeler < handle
     
     movieIsPlaying = false;
     
-    hmPt2use; % when reading PostTF heatmaps instead of movies this specifies which point to plot heatmaps for.  Not sure where this should go.
+    hmPt2use=1; % when reading PostTF heatmaps instead of movies this specifies which point to plot heatmaps for.  Not sure where this should go.
 
   end
 %   properties (SetAccess=private) 
@@ -4212,7 +4212,7 @@ classdef Labeler < handle
       %tracking can be superimposed on heatmaps.
       for i=1:numel(movfiles)
           if strcmp(obj.movieReader(i).info.type,'poseNetHeatmap') && isempty(trkfilesAll{i})
-                %MASSIVE ASSUMPTION!!!: Assumeing that videos/heatmaps are
+                %MASSIVE ASSUMPTION!!!: Assuming that videos/heatmaps are
                 %loaded in sequential order i.e.: video view 1, video view
                 %2, heatmap view 1, heatmap view 2.
                 trkfilesAll{i} = trkfilesAll{i-(numel(movfiles)/2)};
