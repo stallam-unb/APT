@@ -8052,13 +8052,14 @@ classdef Labeler < handle
       lpos2 = obj.labeledpos2GTaware{iMov}(:,:,frm,iTgt);
       
       %scaling points if they are to be displayed on a poseTF heatmap as heatmaps
-      %are half size of normal video frames
+      %are half size of normal video frames - This scale factor may change
+      hmSclFac = 2;%heat map scale factor - how much smaller the heatmaps are than the original videos.  This may change with future versions of poseTF.  May need to change to online calculation.
       nViews = obj.nview;
       nPtsPerView = obj.nLabelPoints/nViews;
       for currView = 1:nViews
           if strcmp(obj.movieReader(currView).info.type,'poseNetHeatmap')
               ptsThisView = ((currView-1)*nPtsPerView)+1 : (currView*nPtsPerView);
-              lpos2(ptsThisView,:)=lpos2(ptsThisView,:)./2;
+              lpos2(ptsThisView,:)=lpos2(ptsThisView,:)./hmSclFac;
           end
       end
       
