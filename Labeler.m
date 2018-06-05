@@ -4215,7 +4215,7 @@ classdef Labeler < handle
                 trkfilesAll{i} = trkfilesAll{i-(numel(movfiles)/2)};
                 keywords{i}= keywords{i-(numel(movfiles)/2)};
                 
-                if isempty(trkfilesAll{i-(numel(movfiles)/2)})
+                if isempty(trkfilesAll{i})
                     warning('Unable to duplicate .trk data for heatmaps. Heatmap loading assumes videos are added to project in this order: video view 1, video view 2, heatmap view 1, heatmap view 2 etc.')
                 end
           end
@@ -8040,7 +8040,7 @@ classdef Labeler < handle
       lpos2 = obj.labeledpos2GTaware{iMov}(:,:,frm,iTgt)
       
       %scaling points if they are to be displayed on a poseTF heatmap as heatmaps
-      %are /2 size of video
+      %are half size of normal video frames
       nViews = obj.nview;
       nPtsPerView = obj.nLabelPoints/nViews;
       for currView = 1:nViews
