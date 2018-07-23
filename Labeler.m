@@ -26,7 +26,9 @@ classdef Labeler < handle
       'suspScore' 'suspSelectedMFT' 'suspComputeFcn' ...
       'preProcParams' 'preProcH0' 'preProcSaveData' ...
       'xvResults' 'xvResultsTS' ...
-      'fgEmpiricalPDF'};
+      'fgEmpiricalPDF' ...
+      'threeDposLabels'...
+      'threeDposPredictions'};
     SAVEPROPS_LPOS = {...
       'labeledpos' 'nan'
       'labeledposGT' 'nan'
@@ -307,6 +309,9 @@ classdef Labeler < handle
     labeledposTSGT        % like .labeledposTS
     labeledpostagGT       % like .labeledpostag
     labeledpos2GT         % like .labeledpos2
+    
+    threeDposLabels      % 3D position.  Multiview projects only.  Not currenlty implemented for labels, only for Imported predictions (see threeDposPredictions)      
+    threeDposPredictions    % imported 3D position.  Multiview projects only.  Data format: [xyz,PhysicalPoint,frame]  [3,nPhysPts,nFrms]
   end
   properties % make public setaccess
     labelPointsPlotInfo;  % struct containing cosmetic info for labelPoints. init: C
@@ -2217,6 +2222,33 @@ classdef Labeler < handle
       if ~isfield(s,'preProcSaveData')
         s.preProcSaveData = false;
       end
+      
+      %20180723 if loaded project doens't have 3D data loaded making sure
+      %to overwrite any previous project's 3D data with NaNs/ initialize
+      nMov = size(s.movieFilesAll,1);
+      if ~isfield(s,'threeDposLabels') % 
+          for iMov = 1:nMov
+            try
+                s.threeDposLabels{iMov} = nan(3,s.cfg.NumLabelPoints,s.movieInfoAll{iMov,1}.nframes);
+            catch
+                s.threeDposLabels{iMov} = nan(3,5,1455);
+                warning('Failed to initialize threeDposLabels correctly')
+            end
+          end
+      end
+      
+      
+      if ~isfield(s,'threeDposPredictions') %
+          for iMov = 1:nMov
+            try
+                s.threeDposPredictions{iMov} = nan(3,s.cfg.NumLabelPoints,s.movieInfoAll{iMov,1}.nframes);
+            catch
+                s.threeDposPredictions{iMov} = nan(3,5,1455);
+                warning('Failed to initialize threeDposPredictions correctly')
+            end
+          end
+      end
+      
     end
 
   end 
@@ -4683,6 +4715,24 @@ classdef Labeler < handle
           s = load(tfile,'-mat');
           s = TrkFile.modernizeStruct(s);
           
+          %loading 3D data if it exists
+          %!!!!!ASSUMING the following: 
+          %     (1) _3Dres.mat file has same path & filename structure as .trk file
+          %     (2) _3Dres.mat file saved in same folder as .trk file for the FIRST camera view
+          %Both currently (23/7/18) true but may not be in the future!
+          if iVw ==1 %if first view loading 3D data
+              [fpath,fbase,~]=fileparts(tfile);
+              threeDfname = [fpath,filesep,fbase,'_3Dres.mat'];
+              if ~exist(threeDfname,'file') %if no 3D file found setting 3D data to NaN
+                  s3D = nan(3,nPhysPts,size(s.pTrk,3));
+              else
+                  threeDresData = load(threeDfname);
+                  s3D = threeDresData.Pbest; %[xyz,PhysicalPoint,frame]  [3,nPhysPts,nFrms]
+                  disp(['Loaded 3D data from ', threeDfname])
+              end   
+              obj.threeDposPredictions{iMov} = s3D;
+          end
+          
           if isfield(s,'pTrkiPt')
             iPt = s.pTrkiPt;
           else
@@ -4773,6 +4823,8 @@ classdef Labeler < handle
         if tfTag
           obj.(lposTagFld){iMov} = lpostag;
         end
+       
+        
       end      
     end
     

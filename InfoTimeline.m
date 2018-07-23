@@ -1,7 +1,7 @@
 classdef InfoTimeline < handle
 
   properties (Constant)
-    TLPROPS = {'x' 'y' 'dx' 'dy' '|dx|' '|dy|' 'occluded'};
+    TLPROPS = {'x' 'y' 'dx' 'dy' '|dx|' '|dy|' 'x3D' 'y3D' 'z3D' 'centroid2pt3D' 'occluded'};  %any label for a plot of 3D info *MUST* end in '3D'.  This is used to determine how many points (nPts for 2D nPts/2 for 3D info) %uglyCodeFlag_SJH
   end
   
 %   % AL: Not using transparency for now due to perf issues on Linux
@@ -290,7 +290,21 @@ classdef InfoTimeline < handle
       dy = max(y2-y1,eps);
       lposNorm = (dat-y1)/dy; % Either nan, or in [0,1]
       x = 1:size(lposNorm,2);
-      for i=1:obj.npts
+      
+      tempPcode = ['ThisIsJustPadding_',cell2mat(obj.props(obj.curprop,3))]; %current plot type. If 3D last 2 characters == '3D'.  %uglyCodeFlag_SJH
+      if strcmp(tempPcode(end-1:end),'3D') %3D metric use half num points %uglyCodeFlag_SJH
+        nPts2plot = obj.npts/2;
+      else %2D plot use normal num points
+        nPts2plot = obj.npts;
+      end
+      
+      for i=1:obj.npts %clearing old points (necessary as differnt number of points for different metrics means some points won't be overwritten in next display loop)
+        xOld = get(obj.hPts(i),'XData');
+        yOld = get(obj.hPts(i),'YData');
+        set(obj.hPts(i),'XData',xOld.*NaN,'YData',yOld.*NaN);
+      end
+      
+      for i=1:nPts2plot %plotting
         set(obj.hPts(i),'XData',x,'YData',lposNorm(i,:));
       end
       
@@ -563,9 +577,10 @@ classdef InfoTimeline < handle
   end
 
   methods (Static) % util
-    function dmat = getDataFromLpos(lpos,lpostag,pcode,iTgt)
+    function dmat = getDataFromLpos(lpos,lpostag,pcode,iTgt,threeDpos)
       % lpos: [npts x 2 x nfrm x ntgt] label array as in
       %   lObj.labeledpos{iMov}
+      % threeDpos: [xyz,PhysicalPoint,frame]  [3,nPhysPts,nFrms] as in lObj.threeDposPredictions
       % lpostag: [npts x nfrm x ntgt] logical as in lObj.labeledpostag{iMov}
       % pcode: name/id of data to extract
       % iTgt: current target
@@ -596,6 +611,16 @@ classdef InfoTimeline < handle
           dmat = reshape(lpos(:,2,:,iTgt),npts,nfrm);
           dmat = abs(diff(dmat,1,2));
           dmat(:,end+1) = nan;
+         case 'x3D'
+             dmat = squeeze(threeDpos(1,:,:));
+         case 'y3D'
+             dmat = squeeze(threeDpos(2,:,:));
+         case 'z3D'
+             dmat = squeeze(threeDpos(3,:,:));
+          case 'centroid2pt3D'
+             centroid = mean(threeDpos, 2, 'omitnan');
+             threeDpts2cntd = threeDpos - centroid;
+             dmat = squeeze( sqrt(sum(threeDpts2cntd.^2,1)) );
         case 'occluded'
           dmat = double(lpostag(:,:,iTgt));
         otherwise
@@ -629,16 +654,32 @@ classdef InfoTimeline < handle
         switch ptype
           case 'Labels'
             lpos = labeler.labeledposGTaware{iMov};
-            lpostag = labeler.labeledpostagGTaware{iMov};            
-            data = InfoTimeline.getDataFromLpos(lpos,lpostag,pcode,iTgt);
+            lpostag = labeler.labeledpostagGTaware{iMov};  
+            td = nan(3,obj.npts/2,obj.nfrm);%Not implemented yet, setting to Nan as place holder %uglyCodeFlag_SJH.  labeler.threeDposLabels{iMov};%3D data.  Not currenlty implemented for Labels, only Labels2 (imported predications)          
+            data = InfoTimeline.getDataFromLpos(lpos,lpostag,pcode,iTgt,td);
+            tempPcode = ['ThisIsJustPadding_',cell2mat(obj.props(obj.curprop,3))]; %current plot type. If 3D last 2 characters == '3D'.  %uglyCodeFlag_SJH
+            if strcmp(tempPcode(end-1:end),'3D') %uglyCodeFlag_SJH
+                warning('Plotting of 3D metrics is not implemented for labels yet, only for imported predictions!')
+            end
           case 'Labels2'            
             lpos = labeler.labeledpos2GTaware{iMov};
             lpostag = false(obj.npts,labeler.nframes,labeler.nTargets);
-            data = InfoTimeline.getDataFromLpos(lpos,lpostag,pcode,iTgt);            
+            td = labeler.threeDposPredictions{iMov}; %3D position
+            data = InfoTimeline.getDataFromLpos(lpos,lpostag,pcode,iTgt,td);
+            if sum(isnan(data(:)))==length(data(:))
+                warning('No 3D data loaded. Check _3Dres.mat files exist for this video.  If they do. try re-importing .trk files to import 3D data')
+            end
           case 'Tracks'
             data = obj.tracker.getPropValues(pcode);
         end
-        szassert(data,[obj.npts obj.nfrm]);
+
+        tempPcode = ['ThisIsJustPadding_',cell2mat(obj.props(obj.curprop,3))]; %current plot type. If 3D last 2 characters == '3D'.  %uglyCodeFlag_SJH
+        if strcmp(tempPcode(end-1:end),'3D') %uglyCodeFlag_SJH
+            szassert(data,[obj.npts/2, obj.nfrm]); %true for 3D metrics
+        else
+            szassert(data,[obj.npts obj.nfrm]);%true for all non-3D metrics but not for 3D metrics when size(data)==[npts/2,nfrm]
+        end
+        
       end
     end
     
