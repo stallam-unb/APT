@@ -95,7 +95,7 @@ classdef InfoTimeline < handle
       ax.ButtonDownFcn = @(src,evt)obj.cbkBDF(src,evt);
       hold(ax,'on');
       obj.hAx = ax;
-      obj.hCurrFrame = plot(ax,[nan nan],[0 1],'-','Color',[1 1 1],'hittest','off');
+      obj.hCurrFrame = plot(ax,[nan nan],get(obj.hAx,'YLim'),'-','Color',[1 1 1],'hittest','off');
 %       obj.hMarked = plot(ax,[nan nan],[nan nan],'-','Color',[1 1 0],'hittest','off');
       
       fig = ax.Parent;
@@ -305,7 +305,8 @@ classdef InfoTimeline < handle
       end
       
       for i=1:nPts2plot %plotting
-        set(obj.hPts(i),'XData',x,'YData',lposNorm(i,:));
+        set(obj.hPts(i),'XData',x,'YData',dat(i,:));%lposNorm(i,:));
+        set(obj.hAx,'YLim',[y1,y2])
       end
       
 %       markedFrms = find(any(obj.getMarkedDataCurrMovTgt(),1));
@@ -346,6 +347,7 @@ classdef InfoTimeline < handle
       x1 = frm+r; %min(frm+r,obj.nfrm);
       obj.hAx.XLim = [x0 x1];
       set(obj.hCurrFrame,'XData',[frm frm]);
+      set(obj.hCurrFrame,'YData',get(obj.hAx,'YLim'));
       
       if obj.selectOn
         f0 = obj.selectOnStartFrm;
