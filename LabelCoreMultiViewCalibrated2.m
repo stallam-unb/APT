@@ -209,6 +209,7 @@ classdef LabelCoreMultiViewCalibrated2 < LabelCore
         ax = obj.hAx(obj.iPt2iAx(iPt));
         obj.hPts(iPt) = plot(ax,ptsArgs{:},'Tag',sprintf('LabelCoreMV_Pt%d',iPt));
         obj.labeler.labeledpos2_ptsH(iPt) = plot(ax,ptsArgs2{:},'Tag',sprintf('LabelCoreMV_LabeledPos2%d',iPt)); % AL 2018018: Cant remember why LCMVC2 is messing with labeler.labeledpos2_ptsH
+        obj.labeler.impPredRaw_ptsH(iPt) = plot(ax,ptsArgs2{:},'Tag',sprintf('LabelCoreMV_LabeledPos2%d',iPt));
         txtStr = num2str(iSet);
         txtargs = {'Color',setClr,...
           'FontSize',ppi.FontSize,...
