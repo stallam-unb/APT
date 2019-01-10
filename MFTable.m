@@ -359,6 +359,38 @@ classdef MFTable
           error('Multiple movie-frame-target tables found in file ''%s''.',fname);
       end
     end
+    
+    function [tblTrn,tblTst] = readSplitJson(jsonfile)
+      % Read split defns from json file with 0-BASED json arrays
+      %
+      % tblTrn, tblTst: (1-BASED, as are all APT MFTables)
+      
+      lines = readtxtfile(jsonfile);
+      if numel(lines)>1
+        warningNoTrace('split definition json file has multiple lines.');
+      end
+      s = jsondecode(lines{1});
+      assert(iscell(s));
+      szassert(s,[2 1]);
+      s{1} = s{1}+1; % 0b -> 1b
+      s{2} = s{2}+1; % 0b -> 1b
+      tblTrn = table(s{1}(:,1),s{1}(:,2),s{1}(:,3),'VariableNames',MFTable.FLDSID);
+      tblTst = table(s{2}(:,1),s{2}(:,2),s{2}(:,3),'VariableNames',MFTable.FLDSID);
+    end
+    
+    function writeSplitJson(jsonfile,tblTrn,tblTst)
+      % Writes 1-based MFTables to 0-based json arrays
+      
+      s = { tblTrn{:,:}-1; tblTst{:,:}-1 }; % 1b -> 0b
+      js = jsonencode(s);
+      if exist(jsonfile,'file')>0
+        warningNoTrace('Json file ''%s'' already exists. Overwriting.',jsonfile);
+      end
+      fh = fopen(jsonfile,'w');
+      fprintf(fh,'%s\n',js);
+      fclose(fh);
+    end
+    
           
   end
   

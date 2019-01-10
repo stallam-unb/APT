@@ -12,7 +12,9 @@ classdef DeepModelChainOnDisk < handle & matlab.mixin.Copyable
     trainID % a single modelID may be trained multiple times due to 
             % train-augmentation, so a single modelID may have multiple
             % trainID associated with it. Each (modelChainID,trainID) pair
-            % has a unique associated stripped lbl.            
+            % has a unique associated stripped lbl.
+    splitID % (optional). char, split ID. A stripped lbl can have 
+            % associated splits to be used in train/track ops
     restartTS % Training for each (modelChainID,trainID) can be killed and
               % restarted arbitrarily many times. This timestamp uniquely
               % identifies a restart
@@ -29,6 +31,8 @@ classdef DeepModelChainOnDisk < handle & matlab.mixin.Copyable
     
     lblStrippedLnx % full path to stripped lbl file for this train session
     lblStrippedName % short filename 
+    splitLnx
+    splitName 
     errfileLnx 
     errfileName
     trainLogLnx
@@ -62,6 +66,12 @@ classdef DeepModelChainOnDisk < handle & matlab.mixin.Copyable
     function v = get.lblStrippedName(obj)
       v = sprintf('%s_%s.lbl',obj.modelChainID,obj.trainID);
     end
+    function v = get.splitLnx(obj)      
+      v = [obj.dirProjLnx '/' obj.splitName];      
+    end
+    function v = get.splitName(obj)
+      v = sprintf('%s_%s_split_%s.json',obj.modelChainID,obj.trainID,obj.splitID);
+    end    
     function v = get.errfileLnx(obj)      
       v = [obj.dirProjLnx '/' obj.errfileName];      
     end
@@ -74,9 +84,9 @@ classdef DeepModelChainOnDisk < handle & matlab.mixin.Copyable
     function v = get.trainLogName(obj)
       switch obj.trainType
         case DLTrainType.Restart
-          v = sprintf('%s_%s_%s%s.log',obj.modelChainID,obj.trainID,lower(char(obj.trainType)),obj.restartTS);
+          v = sprintf('%s_%s_vw%d_%s%s.log',obj.modelChainID,obj.trainID,obj.view,lower(char(obj.trainType)),obj.restartTS);
         otherwise
-          v = sprintf('%s_%s_%s.log',obj.modelChainID,obj.trainID,lower(char(obj.trainType)));
+          v = sprintf('%s_%s_vw%d_%s.log',obj.modelChainID,obj.trainID,obj.view,lower(char(obj.trainType)));
       end
     end    
     function v = get.killTokenLnx(obj)

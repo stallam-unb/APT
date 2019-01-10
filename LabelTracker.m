@@ -180,7 +180,7 @@ classdef LabelTracker < handle
       %   - lObj.preProcData has been updated to include all rows of
       %   tblPTrn; lObj.preProcData.iTrn has been set to those rows
       %
-      % PostConditions (tfsucc=false): other outputs indeterminte
+      % PostConditions (tfsucc=false): other outputs indeterminate
       %
       % tblPTrn (in): Either [], or a MFTable.
       % wbObj: Either [], or a WaitBarWithCancel.

@@ -446,11 +446,11 @@ classdef DeepTracker < LabelTracker
       tfCanTrain = true;      
     end
     
-    function retrain(obj,varargin)
-      
-      [wbObj,dlTrnType] = myparse(varargin,...
+    function retrain(obj,varargin)      
+      [wbObj,tblTrn,dlTrnType] = myparse(varargin,...
         'wbObj',[],...
-        'dlTrnType',DLTrainType.New ...
+        'tblTrn',[],... % MFTable, training rows. Defaults to all labeled rows
+        'dlTrnType',DLTrainType.New ... % scalar DLTrainType
         );
       
       if obj.bgTrnIsRunning
@@ -500,9 +500,9 @@ classdef DeepTracker < LabelTracker
       
       switch trnBackEnd.type
         case {DLBackEnd.Bsub DLBackEnd.Docker}
-          obj.trnSpawnBsubDocker(trnBackEnd,dlTrnType,modelChain,'wbObj',wbObj);
+          obj.trnSpawnBsubDocker(trnBackEnd,dlTrnType,modelChain,'wbObj',wbObj,'tblTrn',tblTrn);
         case DLBackEnd.AWS
-          obj.trnSpawnAWS(trnBackEnd,dlTrnType,modelChain,'wbObj',wbObj);          
+          obj.trnSpawnAWS(trnBackEnd,dlTrnType,modelChain,'wbObj',wbObj,'tblTrn',tblTrn); 
         otherwise
           assert(false);
       end
@@ -589,8 +589,9 @@ classdef DeepTracker < LabelTracker
       %  - training aws job spawned
       %  - .trnName, .trnNameLbl, trnLastDMC set
 
-      [wbObj] = myparse(varargin,...
-        'wbObj',[]... 
+      [wbObj,tblTrn] = myparse(varargin,...
+        'wbObj',[],...
+        'tblTrn',[]... % optional, MFTable specifying training rows
         );
       
       % (aws check instance running)
@@ -608,15 +609,17 @@ classdef DeepTracker < LabelTracker
         'trainID','',... % to be filled in 
         'trainType',trnType,...
         'iterFinal',obj.sPrm.dl_steps);
-        %'backEnd',backEnd);
+      %dmc.splitID also to be filled in, if ~isempty(tblTrn)
       
       obj.downloadPretrainedWeights();         
       
-      % create/ensure stripped lbl; set trainID
+      tfDoSplit = ~isempty(tblTrn);
+
+      % create/ensure stripped lbl; flesh out dmc
       tfGenNewStrippedLbl = trnType==DLTrainType.New || trnType==DLTrainType.RestartAug;
       if tfGenNewStrippedLbl
-        s = obj.trnCreateStrippedLbl(backEnd,'wbObj',wbObj); %#ok<NASGU>
-        
+        lbld = obj.trnCreateStrippedLbl(backEnd,'wbObj',wbObj); %#ok<NASGU>
+                
         trainID = datestr(now,'yyyymmddTHHMMSS');
         dmc.trainID = trainID;
         
@@ -630,8 +633,17 @@ classdef DeepTracker < LabelTracker
             error('Failed to create dir %s: %s',dlLblFileLclDir,msg);
           end
         end
-        save(dlLblFileLcl,'-mat','-v7.3','-struct','s');
+        save(dlLblFileLcl,'-mat','-v7.3','-struct','lbld');
         fprintf('Saved stripped lbl file: %s\n',dlLblFileLcl);
+        
+        if tfDoSplit
+          % If we're generating a new sLbl, let's generate a new split json
+          tblTst = DeepTracker.checkTblTrnStrippedLbl(lbld,tblTrn);
+          dmc.splitID = '0'; % any name ok for now
+          splitjson = dmc.splitLnx;
+          MFTable.writeSplitJson(splitjson,tblTrn,tblTst);
+          fprintf('Wrote split json: %s\n',splitjson);
+        end
       else % Restart
         trainID = obj.trnNameLbl;
         assert(~isempty(trainID));
@@ -644,12 +656,34 @@ classdef DeepTracker < LabelTracker
         else
           error('Cannot find stripped lbl file: %s',dlLblFileLcl);
         end
-        
-        dmc.restartTS = datestr(now,'yyyymmddTHHMMSS');
-      end
 
-      % At this point
-      % We have (modelChainID,trainID). stripped lbl is on disk. 
+        if tfDoSplit
+          % If we are doing a restart, dmc should match the .trnLastDMC.
+          dmc.splitID = '0'; % any name ok for now
+          splitjson = dmc.splitLnx;
+          assert(isequal(splitjson,obj.trnLastDMC(1).splitLnx));
+          % Something isn't quite right with this meth's API in the Restart 
+          % case b/c we are passing some things but relying on obj props
+          % from the last/previous trains for others. A bit unclear but
+          % prob ok for now.
+                    
+          % Let's be super-safe
+          lbld = load(dlLblFileLcl,'-mat');
+          tblTst = DeepTracker.checkTblTrnStrippedLbl(lbld,tblTrn);
+          [tblTrn0,tblTst0] = MFTable.readSplitJson(splitjson);
+          assert(isequal(tblTrn,tblTrn0),'Unexpected training split in json: %s',splitjson);
+          assert(isequal(tblTst,tblTst0),'Unexpected test split in json: %s',splitjson);
+          fprintf('Using existing split json: %s\n',splitjson);
+        end
+
+        dmc.restartTS = datestr(now,'yyyymmddTHHMMSS');        
+      end
+      
+
+      % At this point:
+      % - stripped lbl is on disk
+      % - stripped json is on disk, if applicable
+      % - we have a scalar dmc that is configured, save for .view
 
       nvw = obj.lObj.nview;
       syscmds = cell(nvw,1);
@@ -743,11 +777,6 @@ classdef DeepTracker < LabelTracker
         obj.trnLastDMC = dmc;
       end
     end
-    
-%     function s = trnLogfileBsub(obj,iview)
-%       % fullpath to training bsub logfile
-%       s = DeepTracker.trnLogfileStc(obj.sPrm.CacheDir,obj.trnName,iview);
-%     end
     
     function [tfsucc,hedit] = testBsubConfig(obj,varargin)
       
@@ -904,6 +933,18 @@ classdef DeepTracker < LabelTracker
         basepaths{end+1,1} = bps;
       end
     end    
+    
+    function tblTst = checkTblTrnStrippedLbl(lbld,tblTrn)
+      tblPP = table(lbld.preProcData_MD_mov,lbld.preProcData_MD_frm,lbld.preProcData_MD_iTgt,...
+        'VariableNames',MFTable.FLDSID);
+      [tf,loc] = ismember(tblPP,tblTrn);
+      nTrnMissing = height(tblTrn)-nnz(tf);
+      if nTrnMissing>0
+        error('%d specified training rows do not exist in preprocessed data cache.',nTrnMissing);
+      end
+      tblTst = tblPP(~
+      XXXTODO
+    end    
   end
   %% AWS Trainer    
   methods
@@ -921,6 +962,10 @@ classdef DeepTracker < LabelTracker
       [wbObj] = myparse(varargin,...
         'wbObj',[]... 
         );
+      
+%       if ~isempty(tblTrn)
+%         fprintf(2,'TODO: AWS + tblTrn\n');
+%       end
             
       nvw = obj.lObj.nview;
       
