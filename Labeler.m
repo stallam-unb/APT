@@ -9506,7 +9506,7 @@ classdef Labeler < handle
         bgPrms = sPrm.ROOT.ImageProcessing.BackSub;
         mrs = obj.movieReader;
         for i=1:numel(mrs)
-          mrs(i).open(mrs(i).filename,'bgType',bgPrms.BGType,...
+          mrs(i).open(mrs(i).filenameorig,'bgType',bgPrms.BGType,...
             'bgReadFcn',bgPrms.BGReadFcn);
           % mrs(i) should already be faithful to .forceGrayscale,
           % .movieInvert, cropInfo

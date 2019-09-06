@@ -2,7 +2,10 @@ classdef MovieReader < handle
 % Like VideoReader, but wraps get_readframe_fcn
   
   properties (SetAccess=private)
-    filename = '';
+    filenameorig = ''; % filename originally passed to open()
+    filename = ''; % actual filename that is on disk
+    filenameMD = ''; % metadata extracted from pseudo-filename (fname) passed to open()
+    filenameMDSeparator = '#'; % conceptually Constant; for parsing pseudo-filename
     
     readFrameFcn = [];
     nframes = nan;
@@ -106,6 +109,11 @@ classdef MovieReader < handle
     end
         
     function open(obj,fname,varargin)
+      % fname: moviename, or pseudo-moviename that contains metadata to be
+      % passed to get_readframe_fcn to help read movie
+      %
+      % The parsing/handling of pseudo-movienames is specific to APT and
+      % MovieReader is a reasonably convenient home. 
       
       [bgTy,bgReadFcn] = myparse(varargin,...
         'bgType',[],... % optional, string enum
@@ -113,15 +121,39 @@ classdef MovieReader < handle
          ... % 'preload',false... % if true, frames pre-read upfront. passed thru to get_readframe_fcn
         ); 
       
+      fname0 = fname;
+      [fnameP,fnameF,fnameE] = fileparts(fname);
+      fnameMD = [];
+      getreadframeargs = {};
+      if strcmp(fnameE,'.bag')
+        toks = regexp(fnameF,obj.filenameMDSeparator,'split');
+        ntok = numel(toks);
+        switch ntok
+          case 1
+            % no MD in fname; no action
+          case 2
+            % fnameF was actualFname#camera2.bag or similar
+            
+            fname = fullfile(fnameP,[toks{1} fnameE]);
+            fnameMD = toks{2};
+            getreadframeargs = {'topicpat' fnameMD};
+          otherwise
+            error('Invalid bag filename ''%s''.',fnameF);
+        end
+      end
+      
       assert(exist(fname,'file')>0,'Movie ''%s'' not found.',fname);
       
       if obj.isOpen
         obj.close();
       end
       
-      obj.filename = fname;      
+      obj.filenameorig = fname0;
+      obj.filename = fname;
+      obj.filenameMD = fnameMD;
       [obj.readFrameFcn,obj.nframes,obj.fid,obj.info] = ...
-        get_readframe_fcn(obj.filename,'preload',obj.preload);%,'neednframes',obj.neednframes);
+        get_readframe_fcn(obj.filename,'preload',obj.preload,...
+        getreadframeargs{:});%,'neednframes',obj.neednframes);
       
       if isfield(obj.info,'readerobj')
         obj.info = rmfield(obj.info,'readerobj');
@@ -240,7 +272,9 @@ classdef MovieReader < handle
       obj.nc = nan;
       
       obj.fid = nan;
+      obj.filenameorig = '';
       obj.filename = '';
+      obj.filenameMD = '';
       
       obj.bgType = [];
       obj.bgIm = [];

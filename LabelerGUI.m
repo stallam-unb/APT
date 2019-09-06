@@ -1656,18 +1656,6 @@ lc = lObj.lblCore;
 tfShow3DAxes = ~isempty(lc) && lc.supportsMultiView && lc.supportsCalibration;
 % handles.menu_view_show_3D_axes.Enable = onIff(tfShow3DAxes);
 
-% function hlpUpdateTxProjectName(lObj)
-% projname = lObj.projname;
-% info = lObj.projFSInfo;
-% if isempty(info)
-%   str = projname;
-% else
-%   [~,projfileS] = myfileparts(info.filename);  
-%   str = sprintf('%s / %s',projfileS,projname);
-% end
-% hTX = lObj.gdata.txProjectName;
-% hTX.String = str;
-
 function cbkProjNameChanged(src,evt)
 lObj = evt.AffectedObject;
 handles = lObj.gdata;
