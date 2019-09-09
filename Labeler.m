@@ -3358,6 +3358,9 @@ classdef Labeler < handle
         movfilefull = obj.projLocalizePath(movFile);
         assert(exist(movfilefull,'file')>0,'Cannot find file ''%s''.',movfilefull);
         
+        [tfIsContainer,containerType,movFile,movfilefull] = ...
+          MovieReader.handleContainerMoviefileUI(movFile,movfilefull);
+        
         % See movieSetInProj()
         if any(strcmp(movFile,obj.(PROPS.MFA)))
           if nMov==1

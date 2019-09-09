@@ -1,11 +1,15 @@
 classdef MovieReader < handle
 % Like VideoReader, but wraps get_readframe_fcn
   
+  properties (Constant)
+    filenameMDSeparator = '#'; % for parsing pseudo-filename
+  end
+
   properties (SetAccess=private)
     filenameorig = ''; % filename originally passed to open()
     filename = ''; % actual filename that is on disk
     filenameMD = ''; % metadata extracted from pseudo-filename (fname) passed to open()
-    filenameMDSeparator = '#'; % conceptually Constant; for parsing pseudo-filename
+    % filenameMDSeparator = '#'; % conceptually Constant; for parsing pseudo-filename
     
     readFrameFcn = [];
     nframes = nan;
@@ -318,7 +322,73 @@ classdef MovieReader < handle
 
     end
     
+    function [tfIsContainer,containerType,mov,movfull] = ...
+        handleContainerMoviefileUI(mov,movfull)
+      % Check for recognized 'container' moviefiles (moviefiles that
+      % actually contain multiple movies
+      %
+      % Throws on user UI cancel/failure or bad moviefile.
+      
+      [mvP,mvF,mvE] = fileparts(movfull);
+      switch mvE
+        case '.bag'
+          bagInfo = rosbag('info',movfull);
+          tfTopicImg = arrayfun(@(x) contains(x.MessageType, 'Image'), bagInfo.Topics);
+          tfTopicCam = arrayfun(@(x) contains(x.Topic, 'camera'), bagInfo.Topics);
+          % tfTopicCam specific to KineFly
+          
+          tfTopicImgCam = tfTopicImg & tfTopicCam;
+          nTopicImgCam = nnz(tfTopicImgCam);
+          
+          switch nTopicImgCam
+            case 0
+              error('No Topic containing ''camera'' and with *Image MessageType found in %s.',movfull);
+            case 1
+              topicImgCam = bagInfo.Topics(tfTopicImgCam).Topic;
+            otherwise
+              topics = {bagInfo.Topics(tfTopicImgCam).Topic};
+              ttlstr = 'Select ROS Topic';
+              msgstr = sprintf('Please select a Topic:',...
+                mvF);
+              [sel,ok] = listdlg(...
+                'ListString',topics,...
+                'SelectionMode','single',...
+                'Name',ttlstr,...
+                'PromptString',msgstr,...
+                'ListSize',[300 300]...
+                );
+              if ok
+                topicImgCam = topics{sel};
+              else
+                error('No ROS Topic selected.');
+              end
+          end
+          
+          toks = regexp(topicImgCam,'(camera[0-9]+)','tokens');
+          camspec = toks{1}{1};
+          
+          % check/confirm this camera specification will result in unique
+          % selection
+          tfImgCamSpec = ...
+            arrayfun(@(x) contains(x.MessageType, 'Image') && ...
+                          contains(x.Topic, camspec), bagInfo.Topics);
+          assert(nnz(tfImgCamSpec)>0);
+          if nnz(tfImgCamSpec)>1
+            error('Camera specification ''%s'' is not unique in ROS Bagfile.',camspec);
+          end
+          
+          tfIsContainer = true;
+          containerType = 'bag';
+          movfull = fullfile(mvP,[mvF MovieReader.filenameMDSeparator camspec mvE]);
+          [mP,mF,mE] = fileparts(mov);
+          mov = fullfile(mP,[mF MovieReader.filenameMDSeparator camspec mE]);
+        otherwise
+          tfIsContainer = false;
+          containerType = [];          
+      end
+      
+    end
+    
   end
   
 end
-
