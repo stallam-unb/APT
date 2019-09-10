@@ -2,10 +2,11 @@ import sys
 import time
 import timeit
 import h5py
-from scipy.stats import multivariate_normal
+from scipy import stats
 import scipy.io as sio
 import skimage.measure
 import numpy as np
+import matplotlib.pyplot as plt
 
 def compactify_hmap_gaussian_test():
     sig = np.array([[10,4],[4,7]])
@@ -85,6 +86,55 @@ def compactify_hmap_arr(hmagg,offset=1.0,floor=0.0):
     print "Took {} s to compactify".format(toc)
 
     return mus, sigs, As
+
+def create_label_hmap(locs, imsz, sigma, clip=0.05):
+    """
+    Create/return target hmap for parts
+
+    This is a 2d isotropic gaussian with tails clipped to 0.
+    Notes:
+    - Normalization. hmap is in [0,1], but np.sum(hm) may can vary slightly depending on ctr loc
+                    relative to "bin centers"; and may vary greatly if ctr loc approaches edge of im
+    - Gaussian has subpx placement and is not centered precisely at a pixel center
+
+    locs: (nbatch x npts x 2) (x,y) locs, 0-based. (0,0) is the center of the upper-left pixel.
+    imsz: [2] (nr, nc) size of heatmap to return
+    """
+
+    bsize, npts, d = locs.shape
+    assert d == 2
+    out = np.zeros([bsize, imsz[0], imsz[1], npts])
+    for cur in range(bsize):
+        for ndx in range(npts):
+            x, y = np.meshgrid(range(imsz[1]), range(imsz[0]))
+            x0 = locs[cur, ndx, 0]
+            y0 = locs[cur, ndx, 1]
+            assert not (np.isnan(x0) or np.isnan(y0) or np.isinf(x0) or np.isinf(y0))
+
+            dx = x - x0
+            dy = y - y0
+            d2 = dx**2 + dy**2
+            exp = -d2 / 2.0 / sigma / sigma
+            out[cur, :, :, ndx] = np.exp(exp)
+    out[out < clip] = 0.
+
+    return out
+
+def hmap_cmp_viz(hm1, hm2, figsz=(1400,1800), figfaceclr=(0.5,0.5,0.5)):
+    f, ax = plt.subplots(1, 2)
+    m = plt.get_current_fig_manager()
+    m.resize(*figsz)
+    f.set_facecolor(figfaceclr)
+
+    plt.axes(ax[0])
+    plt.cla()
+    plt.imshow(hm1)
+    plt.colorbar()
+
+    plt.axes(ax[1])
+    plt.cla()
+    plt.imshow(hm2)
+    plt.colorbar()
 
 def main(argv):
     inmatfile = argv[0]

@@ -65,6 +65,7 @@ def scale_images(img, locs, scale, conf):
         else:
             simg[ndx, :, :, :] = transform.resize(img[ndx, :, :, :], simg.shape[1:3],
                                                   preserve_range= True, mode='edge')
+    # AL 20190909: This following is not precisely correct, eg cf create_label_images?
     new_locs = locs.copy()
     new_locs = new_locs/scale
     return simg, new_locs
@@ -957,6 +958,8 @@ def preprocess_ims(ims, in_locs, conf, distort, scale, group_sz = 1):
     :param scale: How much to downsample the input image
     :param group_sz:
     :return:
+        AL 20190909: The second return arg (locs) may not be precisely correct when
+        scale>1
     '''
 #    assert ims.dtype == 'uint8', 'Preprocessing only work on uint8 images'
     locs = in_locs.copy()

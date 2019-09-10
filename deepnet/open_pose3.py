@@ -1,6 +1,6 @@
 from keras.models import Model
 from keras.layers.merge import Concatenate
-from keras.layers import Activation, Input, Lambda
+from keras.layers import Activation, Input, Lambda, PReLU
 from keras.layers import subtract as Subtract
 from keras.layers.convolutional import Conv2D
 from keras.layers.convolutional import Conv2DTranspose
@@ -30,15 +30,17 @@ import keras.backend as K
 import logging
 from time import time
 import cv2
+from past.utils import old_div
 
 import open_pose2 as op2
+import heatmap
 
 ISPY3 = sys.version_info >= (3, 0)
 
 def relu(x): return Activation('relu')(x)
 
-def prelu(x):
-    return keras.layers.PReLU(shared_axes=[1, 2])(x)
+def prelu(x,nm):
+    return PReLU(shared_axes=[1, 2],name=nm)(x)
 
 def conv(x, nf, ks, name, weight_decay):
     kernel_reg = l2(weight_decay[0]) if weight_decay else None
@@ -61,13 +63,13 @@ def convblock(x0, nf, namebase, wd_kernel):
     :param wd_kernel:
     :return:
     '''
-    x1 = conv(x0, nf, 3, "convblock_{}_{}".format(namebase, 1), (wd_kernel, 0))
-    x1 = prelu(x1)
-    x2 = conv(x1, nf, 3, "convblock_{}_{}".format(namebase, 2), (wd_kernel, 0))
-    x2 = prelu(x2)
-    x3 = conv(x2, nf, 3, "convblock_{}_{}".format(namebase, 3), (wd_kernel, 0))
-    x3 = prelu(x3)
-    x = Concatenate()([x1, x2, x3])
+    x1 = conv(x0, nf, 3, "cblock-{}-{}".format(namebase, 1), (wd_kernel, 0))
+    x1 = prelu(x1, "cblock-{}-{}-prelu".format(namebase, 1))
+    x2 = conv(x1, nf, 3, "cblock-{}-{}".format(namebase, 2), (wd_kernel, 0))
+    x2 = prelu(x2, "cblock-{}-{}-prelu".format(namebase, 2))
+    x3 = conv(x2, nf, 3, "cblock-{}-{}".format(namebase, 3), (wd_kernel, 0))
+    x3 = prelu(x3, "cblock-{}-{}-prelu".format(namebase, 3))
+    x = Concatenate(name="cblock-{}".format(namebase))([x1, x2, x3])
     return x
 
 def stageCNN(x, nfout, stagety, stageidx, wd_kernel,
@@ -75,12 +77,12 @@ def stageCNN(x, nfout, stagety, stageidx, wd_kernel,
     # stagety: 'map' or 'paf'
 
     for iCB in range(nconvblocks):
-        namebase = "{}_stg{}_cb{}".format(stagety, stageidx, iCB)
+        namebase = "{}-stg{}-cb{}".format(stagety, stageidx, iCB)
         x = convblock(x, nfconvblock, namebase, wd_kernel)
-    x = conv(x, nf1by1, 1, "{}_stg{}_1by1_1".format(stagety, stageidx), (wd_kernel, 0))
-    x = prelu(x)
-    x = conv(x, nfout, 1, "{}_stg{}_1by1_2".format(stagety, stageidx), (wd_kernel, 0))
-    x = prelu(x)
+    x = conv(x, nf1by1, 1, "{}-stg{}-1by1-1".format(stagety, stageidx), (wd_kernel, 0))
+    x = prelu(x, "{}-stg{}-1by1-1-prelu".format(stagety, stageidx))
+    x = conv(x, nfout, 1, "{}-stg{}-1by1-2".format(stagety, stageidx), (wd_kernel, 0))
+    x = prelu(x, "{}-stg{}-1by1-2-prelu".format(stagety, stageidx))
     return x
 
 def stageTdeconv_block(x, num_p, stage, branch, weight_decay, weight_decay_dc, weight_decay_mode):
@@ -156,7 +158,8 @@ def get_training_model(imszuse, wd_kernel, nPAFstg=5, nMAPstg=1, nlimbsT2=38, np
     # VGG
     vggF = op2.vgg_block(img_normalized, wd_kernel)
     # sz should be (bsize, imszvgg[0], imszvgg[1], nchans)
-    assert vggF.shape.as_list()[1:] == imszvgg + (128,)
+    print vggF.shape.as_list()[1:]
+    assert vggF.shape.as_list()[1:] == list(imszvgg + (128,))
 
     # PAF 1..nPAFstg
     xpaflist = []
@@ -164,14 +167,14 @@ def get_training_model(imszuse, wd_kernel, nPAFstg=5, nMAPstg=1, nlimbsT2=38, np
     for iPAFstg in range(nPAFstg):
         xstageout = stageCNN(xstagein, nlimbsT2, 'paf', iPAFstg, wd_kernel)
         xpaflist.append(xstageout)
-        xstagein = Concatenate()([vggF, xstageout])
+        xstagein = Concatenate(name="paf-stg{}".format(iPAFstg))([vggF, xstageout])
 
     # MAP
     xmaplist = []
     for iMAPstg in range(nMAPstg):
         xstageout = stageCNN(xstagein, npts, 'map', iMAPstg, wd_kernel)
         xmaplist.append(xstageout)
-        xstagein = Concatenate()[vggF, xpaflist[-1], xstageout]
+        xstagein = Concatenate(name="map-stg{}".format(iMAPstg))([vggF, xpaflist[-1], xstageout])
 
     assert len(xpaflist) == nPAFstg
     assert len(xmaplist) == nMAPstg
@@ -183,6 +186,34 @@ def get_training_model(imszuse, wd_kernel, nPAFstg=5, nMAPstg=1, nlimbsT2=38, np
 
     model = Model(inputs=inputs, outputs=outputs)
     return model
+
+def configure_losses(model, bsize):
+    '''
+
+    :param model:
+    :param bsize:
+    :return: losses, loss_weights. both dicts whose keys are .names of model.outputs
+    '''
+
+    def eucl_loss(x, y):
+        return K.sum(K.square(x - y)) / bsize / 2  # not sure why norm by bsize nec
+
+    losses = {}
+    loss_weights = {}
+
+    outs = model.outputs
+    lyrs = model.layers
+    for o in outs:
+        # Not sure how to get from output Tensor to its layer. Using
+        # output Tensor name doesn't work with model.compile
+        olyrname = [l.name for l in lyrs if l.output == o]
+        assert len(olyrname) == 1, "Found multiple layers for output."
+        key = olyrname[0]
+        losses[key] = eucl_loss
+        loss_weights[key] = 1.0
+        logging.info('Configured loss for output name {}'.format(key))
+
+    return losses, loss_weights
 
 def get_testing_model(imszuse, nlimb=38, npts=19, fullpred=False):
     stages = 6
@@ -243,31 +274,36 @@ def get_testing_model(imszuse, nlimb=38, npts=19, fullpred=False):
 #----------------------
 
 
-def create_affinity_labels(locs, imsz, graph, scale=1):
+def create_affinity_labels(locs, imsz, graph, tubewidth=1.0):
     """
     Create/return part affinity fields
 
-    locs: (nbatch x npts x 2)
-    imsz: (nr, nc) size of affinity maps to create/return
+    locs: (nbatch x npts x 2) (x,y) locs, 0-based. (0,0) is the center of the
+        upper-left pixel.
+    imsz: [2] (nr, nc) size of affinity maps to create/return
+
     graph: (nlimb) array of 2-element tuples; connectivity/skeleton
-    scale: width of "tube" around limb.
+    tubewidth: width of "limb"
 
     returns (nbatch x imsz[0] x imsz[1] x nlimb*2) paf hmaps.
         4th dim ordering: limb1x, limb1y, limb2x, limb2y, ...
     """
 
-    n_out = len(graph)
-    n_ex = locs.shape[0]
-    out = np.zeros([n_ex,imsz[0],imsz[1],n_out*2])
+    nlimb = len(graph)
+    nbatch = locs.shape[0]
+    out = np.zeros([nbatch, imsz[0], imsz[1], nlimb*2])
     n_steps = 2*max(imsz)
 
-    for cur in range(n_ex):
+    for cur in range(nbatch):
         for ndx, e in enumerate(graph):
-            start_x, start_y = locs[cur,e[0],:]
-            end_x, end_y = locs[cur,e[1],:]
-            ll = np.sqrt( (start_x-end_x)**2 + (start_y-end_y)**2)
+            start_x, start_y = locs[cur, e[0], :]
+            end_x, end_y = locs[cur, e[1], :]
+            assert not (np.isnan(start_x) or np.isnan(start_y) or np.isnan(end_x) or np.isnan(end_y))
+            assert not (np.isinf(start_x) or np.isinf(start_y) or np.isinf(end_x) or np.isinf(end_y))
 
-            if ll==0:
+            ll = np.sqrt((start_x-end_x)**2 + (start_y-end_y)**2)
+
+            if ll == 0:
                 # Can occur if start/end labels identical
                 # Don't update out/PAF
                 continue
@@ -275,58 +311,101 @@ def create_affinity_labels(locs, imsz, graph, scale=1):
             dx = (end_x - start_x)/ll/2
             dy = (end_y - start_y)/ll/2
             zz = None
-            for delta in np.arange(-scale,scale,0.25):  # delta indicates perpendicular displacement from line/limb segment (in px)
+            TUBESTEP = 0.25
+            ntubestep = int(2.0*float(tubewidth)/TUBESTEP + 1)
+            #for delta in np.arange(-tubewidth, tubewidth, 0.25):
+            for delta in np.linspace(-tubewidth, tubewidth, ntubestep):
+                # delta indicates perpendicular displacement from line/limb segment (in px)
+
                 # xx = np.round(np.linspace(start_x,end_x,6000))
                 # yy = np.round(np.linspace(start_y,end_y,6000))
                 # zz = np.stack([xx,yy])
-                xx = np.round(np.linspace(start_x+delta*dy,end_x+delta*dy,n_steps))
-                yy = np.round(np.linspace(start_y-delta*dx,end_y-delta*dx,n_steps))
+                xx = np.round(np.linspace(start_x+delta*dy, end_x+delta*dy, n_steps))
+                yy = np.round(np.linspace(start_y-delta*dx, end_y-delta*dx, n_steps))
                 if zz is None:
-                    zz = np.stack([xx,yy])
+                    zz = np.stack([xx, yy])
                 else:
-                    zz = np.concatenate([zz,np.stack([xx,yy])],axis=1)
+                    zz = np.concatenate([zz, np.stack([xx, yy])], axis=1)
                 # xx = np.round(np.linspace(start_x-dy,end_x-dy,6000))
                 # yy = np.round(np.linspace(start_y+dx,end_y+dx,6000))
                 # zz = np.concatenate([zz,np.stack([xx,yy])],axis=1)
             # zz now has all the pixels that are along the line.
-            # or "tube" of width scale around limb
-            zz = np.unique(zz,axis=1)
-            # zz now has all the unique pixels that are along the line with thickness==scale.
+            # or "tube" of width tubewidth around limb
+            zz = np.unique(zz, axis=1)
+            # zz now has all the unique pixels that are along the line with thickness==tubewidth.
             dx = (end_x - start_x) / ll
             dy = (end_y - start_y) / ll
-            for x,y in zz.T:
+            for x, y in zz.T:
                 xint = int(round(x))
                 yint = int(round(y))
                 if xint < 0 or xint >= out.shape[2] or yint < 0 or yint >= out.shape[1]:
                     continue
-                out[cur,yint,xint,ndx*2] = dx
-                out[cur,yint,xint,ndx*2+1] = dy
+                out[cur, yint, xint, ndx*2] = dx
+                out[cur, yint, xint, ndx*2+1] = dy
 
     return out
 
-def create_label_images(locs, imsz, scale=1):
-    """
-    Create/return target hmap for parts
 
-    This is a 2d isotropic gaussian with sigma=scale with tails clipped to 0. everywhere below 0.05
+def create_label_images_with_rescale(locs, im_sz, scale, blur_rad):
+    '''
+    Like PoseTools.create_label_images
+    :param locs:
+    :param im_sz:
+    :param scale:
+    :param blur_rad: The blur is in the rescaled units
+    :return:
+    '''
 
-    hmap min is 0., max is 1.
+    n_classes = len(locs[0])
+    sz0 = int(im_sz[0] // scale)
+    sz1 = int(im_sz[1] // scale)
 
-    locs: (nbatch x npts x 2) part locs
-    """
+    label_ims = np.zeros((len(locs), sz0, sz1, n_classes))
+    k_size = max(int(round(3 * blur_rad)), 1)
+    blur_l = np.zeros([2 * k_size + 1, 2 * k_size + 1])
+    blur_l[k_size, k_size] = 1
+    blur_l = cv2.GaussianBlur(blur_l, (2 * k_size + 1, 2 * k_size + 1), blur_rad)
+    blur_l = old_div(blur_l, blur_l.max())
+    for cls in range(n_classes):
+        for ndx in range(len(locs)):
+            if np.isnan(locs[ndx][cls][0]) or np.isinf(locs[ndx][cls][0]):
+                continue
+            if np.isnan(locs[ndx][cls][1]) or np.isinf(locs[ndx][cls][1]):
+                continue
+            yy = float(locs[ndx][cls][1]-float(scale-1)/2)/scale
+            xx = float(locs[ndx][cls][0]-float(scale-1)/2)/scale
+            modlocs0 = int(np.round(yy))
+            modlocs1 = int(np.round(xx))
+            l0 = min(sz0, max(0, modlocs0 - k_size))  # min unnec ?
+            r0 = max(0, min(sz0, modlocs0 + k_size + 1))  # max unnec ?
+            l1 = min(sz1, max(0, modlocs1 - k_size))  # etc
+            r1 = max(0, min(sz1, modlocs1 + k_size + 1))
+            label_ims[ndx, l0:r0, l1:r1, cls] = \
+                blur_l[(l0 - modlocs0 + k_size):(r0 - modlocs0 + k_size),
+                       (l1 - modlocs1 + k_size):(r1 - modlocs1 + k_size)]
 
-    n_out = locs.shape[1]
-    n_ex = locs.shape[0]
-    out = np.zeros([n_ex,imsz[0],imsz[1],n_out])
-    for cur in range(n_ex):
-        for ndx in range(n_out):
-            x,y = np.meshgrid(range(imsz[1]),range(imsz[0]))
-            x = x - locs[cur,ndx,0]
-            y = y - locs[cur,ndx,1]
-            dd = np.sqrt(x**2+y**2)
-            out[cur,:,:,ndx] = stats.norm.pdf(dd,scale=scale)/stats.norm.pdf(0,scale=scale)
-    out[out<0.05] = 0.
-    return out
+    # label_ims = 2.0 * (label_ims - 0.5)
+    label_ims -= 0.5
+    label_ims *= 2.0
+    return label_ims
+
+def rescale_points(locs, scale):
+    '''
+    Rescale (x/y) points to a lower res
+
+    :param locs: (nbatch x npts x 2) (x,y) locs, 0-based. (0,0) is the center of the upper-left pixel.
+    :param scale: downsample factor. eg if 2, the image size is cut in half
+    :return: locsrs (nbatch x npts x 2) (x,y) locs, 0-based, rescaled
+    '''
+
+    bsize, npts, d = locs.shape
+    assert d == 2
+    assert issubclass(locs.dtype.type, np.floating)
+
+    locsrs = (locs - float(scale - 1) / 2) / scale
+
+    return locsrs
+
 
 class DataIteratorTF(object):
 
@@ -388,8 +467,8 @@ class DataIteratorTF(object):
             height = int(example.features.feature['height'].int64_list.value[0])
             width = int(example.features.feature['width'].int64_list.value[0])
             depth = int(example.features.feature['depth'].int64_list.value[0])
-            expid = int(example.features.feature['expndx'].float_list.value[0]),
-            t = int(example.features.feature['ts'].float_list.value[0]),
+            expid = int(example.features.feature['expndx'].float_list.value[0])
+            t = int(example.features.feature['ts'].float_list.value[0])
             img_string = example.features.feature['image_raw'].bytes_list.value[0]
             img_1d = np.fromstring(img_string, dtype=np.uint8)
             reconstructed_img = img_1d.reshape((height, width, depth))
@@ -413,17 +492,20 @@ class DataIteratorTF(object):
             assert ims.shape[-1] == 1, "Expected image depth of 1"
             ims = np.tile(ims, 3)
 
-        assert self.conf.op_rescale == 1, "op_rescale not sure if we are okay"
+        assert self.conf.op_rescale == 1, \
+            "Need further mods/corrections below for op_rescale~=1"
+        # Don't compute just locs/op_rescale etc
         mask_sz = [int(x/self.conf.op_label_scale/self.conf.op_rescale) for x in imszuse]
-        mask_sz1 = [self.batch_size,] + mask_sz + [2*self.vec_num]
-        mask_sz2 = [self.batch_size,] + mask_sz + [self.heat_num]
-        mask_im1 = np.ones(mask_sz1)
-        mask_im2 = np.ones(mask_sz2)
-        mask_sz_origres = [int(x/self.conf.op_rescale) for x in imszuse]
-        mask_sz1_origres = [self.batch_size,] + mask_sz_origres + [2*self.vec_num]
-        mask_sz2_origres = [self.batch_size,] + mask_sz_origres + [self.heat_num]
-        mask_im1_origres = np.ones(mask_sz1_origres)
-        mask_im2_origres = np.ones(mask_sz2_origres)
+        # mask_sz1 = [self.batch_size,] + mask_sz + [2*self.vec_num]
+        # mask_sz2 = [self.batch_size,] + mask_sz + [self.heat_num]
+        # mask_im1 = np.ones(mask_sz1)
+        # mask_im2 = np.ones(mask_sz2)
+        # mask_sz_origres = [int(x/self.conf.op_rescale) for x in imszuse]
+        # mask_sz1_origres = [self.batch_size,] + mask_sz_origres + [2*self.vec_num]
+        # mask_sz2_origres = [self.batch_size,] + mask_sz_origres + [self.heat_num]
+        # mask_im1_origres = np.ones(mask_sz1_origres)
+        # mask_im2_origres = np.ones(mask_sz2_origres)
+
 
         ims, locs = PoseTools.preprocess_ims(ims, locs, self.conf,
                                              self.distort, self.conf.op_rescale)
@@ -491,39 +573,6 @@ def massage_conf(conf):
         conf.save_step = (div+1) * conf.display_step
         logging.info("Openpose requires the save step to be an even multiple of the display step. Increasing save step to {}".format(conf.save_step))
 
-def configure_lr_multipliers(model):
-    # setup lr multipliers for conv layers
-
-    lr_mult = dict()
-    for layer in model.layers:
-        # AL: second clause here unnec as Conv2DTranspose appears to be a subclass.
-        # Just for clarity
-        if isinstance(layer, Conv2D) or isinstance(layer, Conv2DTranspose):
-            # stage = 1
-            if re.match("Mconv\d_stage1.*", layer.name) or \
-               re.match("Mdeconv\d_stage1.*", layer.name):
-                kernel_name = layer.weights[0].name
-                bias_name = layer.weights[1].name
-                lr_mult[kernel_name] = 1
-                lr_mult[bias_name] = 2
-
-            # stage > 1
-            elif re.match("Mconv\d_stage.*", layer.name) or \
-                 re.match("Mdeconv\d_stage.*", layer.name):
-                kernel_name = layer.weights[0].name
-                bias_name = layer.weights[1].name
-                lr_mult[kernel_name] = 4
-                lr_mult[bias_name] = 8
-
-            # vgg
-            else:
-                kernel_name = layer.weights[0].name
-                bias_name = layer.weights[1].name
-                lr_mult[kernel_name] = 1
-                lr_mult[bias_name] = 2
-
-    return lr_mult
-
 
 def imszcheckcrop(sz, dimname):
     szm8 = sz % 8
@@ -543,74 +592,20 @@ def imszcheckcrop(sz, dimname):
 # - For paf, changing the blur_rad also changes loss0 roughly linearly as the
 #   limb width ~ linear in blur_rad.
 
-def configure_loss_functions(batch_size, stg6_blur_rad, stg6_resfac,
-                             stg6_wtfac_paf, stg6_wtfac_prt):
-    def eucl_loss(x, y):
-        return K.sum(K.square(x - y)) / batch_size / 2
-
-    losses = {}
-    loss_weights = {}
-    loss_weights_vec = []  # yes this is dumb. loss_weights in order S1L1 S1L2 S2L1 ...
-    for stage in range(1, 7):
-        for lvl in range(1, 3):
-            key = 'weight_stage{}_L{}'.format(stage, lvl)
-            losses[key] = eucl_loss
-            if stage == 6:
-                # stage6 hmap and paf maps are at
-                # 1. stg6_resfac (relative) upsampled resolution
-                # 2. stg6_blur_rad blur_rad
-
-                ispaf = lvl == 1
-                if ispaf:
-                    # 1. increased resolution increases natural scale of loss by
-                    #    stg6_resfac
-                    # 2. increased blur_rad increases " by stg6_blur_rad
-                    #       (relative to blur_rad of 1)
-                    loss_weights[key] = stg6_wtfac_paf / stg6_resfac / stg6_blur_rad
-                    logging.info('Stage 6 paf loss_weight: {}'.format(loss_weights[key]))
-                else:
-                    # 1. has no effect
-                    # 2. increases the natural scale of the loss by stg6_blur_rad**2
-                    #     (assuming earlier stages have blur_rad==1)
-                    loss_weights[key] = stg6_wtfac_prt / stg6_blur_rad**2
-                    logging.info('Stage 6 hmap loss_weight: {}'.format(loss_weights[key]))
-
-                # loss_weights[key] is the end-of-the-day weighting factor passed to K.compile.
-                # Empirically 201906 on bub, blur_rad of 3 (and resfac of 8):
-                #  mean(val_loss_full_paf_ratio)~25 and
-                #  mean(val_loss_full_prt_ratio)~37
-                # ie typical raw loss of stg6/(others) is that number; figured we want optimizer to
-                # upweight stg6 more in the [1,3] range although very unclear it makes any diff.
-                # Note the ratios above are flattish over the convergence/training (with some jumps
-                # at eg LR steps); it is not that the stg6 loss is offset to be higher with small
-                # reduction as convergence occurs. It is delta-loss that is relevant after all
-            else:
-                loss_weights[key] = 1.0
-            loss_weights_vec.append(loss_weights[key])
-
-    return losses, loss_weights, loss_weights_vec
-
 def dot(K, L):
    assert len(K) == len(L), 'lens do not match: {} vs {}'.format(len(K), len(L))
    return sum(i[0] * i[1] for i in zip(K, L))
 
-def training(conf,name='deepnet'):
+def training(conf, name='deepnet'):
 
-    #AL 20190327 For now we massage on the App side so the App knows what to expect for
-    # training outputs
-    #massage_conf(conf)
-
-    base_lr = 4e-5  # 2e-5
-    momentum = 0.9
-    weight_decay = 5e-4
-    lr_policy = "step"
-    batch_size = conf.batch_size
-    gamma = conf.gamma
-    stepsize = int(conf.decay_steps)
-    # stepsize = 68053  # 136106 #   // after each stepsize iterations update learning rate: lr=lr*gamma
+    base_lr = 4e-5  # Gines 5e-5
+    wd_kernel = 5e-4
+    batch_size = conf.batch_size  # Gines 10
+    gamma = conf.gamma  # Gines 1/2
+    stepsize = int(conf.decay_steps)  # after each stepsize iterations update learning rate: lr=lr*gamma
+      # Gines much larger: 200k, 300k, then every 60k
     iterations_per_epoch = conf.display_step
     max_iter = conf.dl_steps/iterations_per_epoch
-    restart = True
     last_epoch = 0
 
     (imnr, imnc) = conf.imsz
@@ -629,45 +624,31 @@ def training(conf,name='deepnet'):
 
     model_file = os.path.join(conf.cachedir, conf.expname + '_' + name + '-{epoch:d}')
     model = get_training_model(imszuse,
-                               weight_decay,
-                               conf.weight_decay_kernel_dc,
-                               conf.weight_decay_dc_mode,
+                               wd_kernel,
                                nlimbsT2=len(conf.op_affinity_graph) * 2,
                                npts=conf.n_classes)
 
-    # load previous weights or vgg19 if this is the first run
-    from_vgg = dict()
-    for blk in range(1,5):
-        for lvl in range(1,3):
-            from_vgg['conv{}_{}'.format(blk,lvl)] = 'block{}_conv{}'.format(blk,lvl)
     logging.info("Loading vgg19 weights...")
+    from_vgg = op2.from_vgg
     vgg_model = VGG19(include_top=False, weights='imagenet')
     for layer in model.layers:
         if layer.name in from_vgg:
             vgg_layer_name = from_vgg[layer.name]
             layer.set_weights(vgg_model.get_layer(vgg_layer_name).get_weights())
-            logging.info("Loaded VGG19 layer: " + vgg_layer_name)
+            logging.info("Loaded VGG19 layer: {}->{}".format(layer.name, vgg_layer_name))
 
     # prepare generators
     train_di = DataIteratorTF(conf, 'train', True, True)
     train_di2 = DataIteratorTF(conf, 'train', True, True)
     val_di = DataIteratorTF(conf, 'train', False, False)
 
-    # AL: looks like lr_mults not used anymore with Adam
-    # configure_lr_multipliers(model)
-    # logging.info('Configured layer learning rate mulitpliers')
-
     assert conf.op_label_scale == 8
     logging.info("Your label_blur_rad is {}".format(conf.label_blur_rad))
-    losses, loss_weights, loss_weights_vec = \
-        configure_loss_functions(batch_size, conf.label_blur_rad, conf.op_label_scale,
-                                 conf.op_hires_wtfac_paf, conf.op_hires_wtfac_prt)
+    losses, loss_weights = configure_losses(model, batch_size)
 
-    save_time = conf.get('save_time',None)
-    # lr decay.
-    def step_decay(epoch):
+    def lr_decay(epoch):  # epoch is 0-based
         initial_lrate = base_lr
-        steps = epoch * iterations_per_epoch
+        steps = (epoch+1) * iterations_per_epoch
         lrate = initial_lrate * math.pow(gamma, math.floor(steps / stepsize))
         return lrate
 
@@ -690,20 +671,22 @@ def training(conf,name='deepnet'):
             self.force = False
             self.save_start = time()
 
-        def on_epoch_end(self, epoch, logs={}):
-            step = (epoch+1) * conf.display_step
+        def on_epoch_end(self, epoch):
+            step = (epoch+1) * iterations_per_epoch
             val_x, val_y = self.val_di.next()
             val_out = self.model.predict(val_x)
             val_loss_full = self.model.evaluate(val_x, val_y, verbose=0)
             val_loss_K = val_loss_full[0]  # want Py 3 unpack
             val_loss_full = val_loss_full[1:]
-            val_loss = dot(val_loss_full, loss_weights_vec)
+            #val_loss = dot(val_loss_full, loss_weights_vec)
+            val_loss = np.nan
             train_x, train_y = self.train_di.next()
             train_out = self.model.predict(train_x)
             train_loss_full = self.model.evaluate(train_x, train_y, verbose=0)
             train_loss_K = train_loss_full[0]  # want Py 3 unpack
             train_loss_full = train_loss_full[1:]
-            train_loss = dot(train_loss_full, loss_weights_vec)
+            # train_loss = dot(train_loss_full, loss_weights_vec)
+            train_loss = np.nan
             lr = K.eval(self.model.optimizer.lr)
 
             # dist only for last layer
@@ -757,40 +740,36 @@ def training(conf,name='deepnet'):
                     model.save(str(os.path.join(conf.cachedir, name + '-{}'.format(int(step)))))
 
 
-
     # configure callbacks
-    lrate = LearningRateScheduler(step_decay)
-    checkpoint = ModelCheckpoint(
-        model_file, monitor='loss', verbose=0, save_best_only=False,
-        save_weights_only=True, mode='min', period=conf.save_step)
+    lrate = LearningRateScheduler(lr_decay)
+    # checkpoint = ModelCheckpoint(
+    #     model_file, monitor='loss', verbose=0, save_best_only=False,
+    #     save_weights_only=True, mode='min', period=conf.save_step)
     obs = OutputObserver(conf, [train_di2, val_di])
-    callbacks_list = [lrate, obs] #checkpoint,
+    callbacks_list = [lrate, obs]  #checkpoint,
 
-    # sgd optimizer with lr multipliers
     # optimizer = MultiSGD(lr=base_lr, momentum=momentum, decay=0.0, nesterov=False, lr_mult=lr_mult)#, clipnorm=1.)
     # Mayank 20190423 - Adding clipnorm so that the loss doesn't go to zero.
     optimizer = Adam(lr=base_lr, beta_1=0.9, beta_2=0.999, epsilon=None, decay=0.0, amsgrad=False)
 
-    # start training
     model.compile(loss=losses, loss_weights=loss_weights, optimizer=optimizer)
 
     logging.info("Your model.metrics_names are {}".format(model.metrics_names))
 
-    #save initial model
+    # save initial model
     model.save(str(os.path.join(conf.cachedir, name + '-{}'.format(0))))
 
-    # training
     model.fit_generator(train_di,
-                        steps_per_epoch=conf.display_step,
+                        steps_per_epoch=iterations_per_epoch,
                         epochs=max_iter-1,
                         callbacks=callbacks_list,
                         verbose=0,
+                        initial_epoch=last_epoch
+                        )
                         # validation_data=val_di,
                         # validation_steps=val_samples // batch_size,
 #                        use_multiprocessing=True,
 #                        workers=4,
-                        initial_epoch=last_epoch
-                        )
 
     # force saving in case the max iter doesn't match the save step.
     model.save(str(os.path.join(conf.cachedir, name + '-{}'.format(int(max_iter*iterations_per_epoch)))))
@@ -1073,3 +1052,14 @@ def model_files(conf, name):
         return None
     traindata_file = PoseTools.get_train_data_file(conf, name)
     return [latest_model_file, traindata_file + '.json']
+
+
+locs = np.array([[0,0],[0,1.5],[0,4],[0,6.9],[0,7.],[0,7.49],[0,7.51],[1,2],[10,12],[16,16]])
+locs = locs[np.newaxis,:,:]
+imsz = (48, 40)
+locsrs = rescale_points(locs, 8)
+imszrs = (6, 5)
+
+import matplotlib.pyplot as plt
+hm1 = create_label_images_with_rescale(locs,imsz,8,3)
+hm2 = heatmap.create_label_hmap(locsrs, imszrs, 3)
