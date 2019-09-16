@@ -33,6 +33,7 @@ import cv2
 from past.utils import old_div
 
 import open_pose2 as op2
+import open_pose_data as opdata
 import heatmap
 
 ISPY3 = sys.version_info >= (3, 0)
@@ -128,7 +129,6 @@ def get_training_model(imszuse, wd_kernel, nPAFstg=5, nMAPstg=1, nlimbsT2=38, np
     assert imnruse % 8 == 0, "Image size must be divisible by 8"
     assert imncuse % 8 == 0, "Image size must be divisible by 8"
 
-    img_input_shape = imszuse + (3,)
     paf_input_shape_hires = imszuse + (nlimbsT2,)
     map_input_shape_hires = imszuse + (npts,)
 
@@ -138,7 +138,9 @@ def get_training_model(imszuse, wd_kernel, nPAFstg=5, nMAPstg=1, nlimbsT2=38, np
 
     inputs = []
 
-    img_input = Input(shape=img_input_shape, name='input_img')
+    # This is hardcoded to dim=3 due to VGG pretrained weights
+    img_input = Input(shape=imszuse + (3,), name='input_img')
+
     # paf_weight_input = Input(shape=paf_input_shape,
     #                          name='input_paf_mask')
     # map_weight_input = Input(shape=map_input_shape,
@@ -325,8 +327,7 @@ def dot(K, L):
 
 def training(conf, name='deepnet'):
 
-    base_lr = 4e-5  # Gines 5e-5
-    wd_kernel = 5e-4
+    base_lr = conf.op_base_lr
     batch_size = conf.batch_size  # Gines 10
     gamma = conf.gamma  # Gines 1/2
     stepsize = int(conf.decay_steps)  # after each stepsize iterations update learning rate: lr=lr*gamma
@@ -344,6 +345,9 @@ def training(conf, name='deepnet'):
     assert conf.dl_steps % iterations_per_epoch == 0, 'For open-pose dl steps must be a multiple of display steps'
     assert conf.save_step % iterations_per_epoch == 0, 'For open-pose save steps must be a multiple of display steps'
 
+    # need this to set default
+    save_time = conf.get('save_time', None)
+
     train_data_file = os.path.join(conf.cachedir, 'traindata')
     with open(train_data_file, 'wb') as td_file:
         pickle.dump(conf, td_file, protocol=2)
@@ -351,7 +355,9 @@ def training(conf, name='deepnet'):
 
     model_file = os.path.join(conf.cachedir, conf.expname + '_' + name + '-{epoch:d}')
     model = get_training_model(imszuse,
-                               wd_kernel,
+                               conf.op_weight_decay_kernel,
+                               nPAFstg=conf.op_paf_nstage,
+                               nMAPstg=conf.op_map_nstage,
                                nlimbsT2=len(conf.op_affinity_graph) * 2,
                                npts=conf.n_classes)
 
@@ -365,9 +371,9 @@ def training(conf, name='deepnet'):
             logging.info("Loaded VGG19 layer: {}->{}".format(layer.name, vgg_layer_name))
 
     # prepare generators
-    train_di = DataIteratorTF(conf, 'train', True, True)
-    train_di2 = DataIteratorTF(conf, 'train', True, True)
-    val_di = DataIteratorTF(conf, 'train', False, False)
+    train_di = opdata.DataIteratorTF(conf, 'train', True, True)
+    train_di2 = opdata.DataIteratorTF(conf, 'train', True, True)
+    val_di = opdata.DataIteratorTF(conf, 'train', False, False)
 
     assert conf.op_label_scale == 8
     logging.info("Your label_blur_rad is {}".format(conf.label_blur_rad))
@@ -398,18 +404,18 @@ def training(conf, name='deepnet'):
             self.force = False
             self.save_start = time()
 
-        def on_epoch_end(self, epoch):
+        def on_epoch_end(self, epoch, logs={}):
             step = (epoch+1) * iterations_per_epoch
             val_x, val_y = self.val_di.next()
-            val_out = self.model.predict(val_x)
-            val_loss_full = self.model.evaluate(val_x, val_y, verbose=0)
+            val_out = self.model.predict(val_x, batch_size=batch_size)
+            val_loss_full = self.model.evaluate(val_x, val_y, batch_size=batch_size, verbose=0)
             val_loss_K = val_loss_full[0]  # want Py 3 unpack
             val_loss_full = val_loss_full[1:]
             #val_loss = dot(val_loss_full, loss_weights_vec)
             val_loss = np.nan
             train_x, train_y = self.train_di.next()
-            train_out = self.model.predict(train_x)
-            train_loss_full = self.model.evaluate(train_x, train_y, verbose=0)
+            train_out = self.model.predict(train_x, batch_size=batch_size)
+            train_loss_full = self.model.evaluate(train_x, train_y, batch_size=batch_size, verbose=0)
             train_loss_K = train_loss_full[0]  # want Py 3 unpack
             train_loss_full = train_loss_full[1:]
             # train_loss = dot(train_loss_full, loss_weights_vec)

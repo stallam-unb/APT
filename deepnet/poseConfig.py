@@ -76,6 +76,8 @@ class config(object):
         self.op_paf_lores_tubewidth = 0.95
         self.op_paf_nstage = 5
         self.op_map_nstage = 1
+        self.op_base_lr = 4e-5  # Gines 5e-5
+        self.op_weight_decay_kernel = 5e-4
         self.n_steps = 4.41
 
         # ------ Leap params

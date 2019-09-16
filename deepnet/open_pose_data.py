@@ -458,7 +458,7 @@ class DataIteratorTF(object):
         self.distort = distort
         self.shuffle = shuffle
         self.batch_size = self.conf.batch_size
-        self.vec_num = len(conf.op_affinity_graph)
+        self.vec_num = len(self.conf.op_affinity_graph)
         self.heat_num = self.conf.n_classes
         self.N = PoseTools.count_records(filename)
         self.debug = debug
@@ -536,14 +536,15 @@ class DataIteratorTF(object):
         (imnr_use, imnc_use) = imszuse
         ims = ims[:, 0:imnr_use, 0:imnc_use, :]
 
-        #if self.conf.img_dim == 1:
-        #    assert ims.shape[-1] == 1, "Expected image depth of 1"
-        #    ims = np.tile(ims, 3)
+        # Needed for VGG pretrained weights which expect imgdepth of 3
+        assert self.conf.img_dim == ims.shape[-1]
+        if self.conf.img_dim == 1:
+            ims = np.tile(ims, 3)
 
         # locs -> PAFs, MAP
-        locs_lores = rescale_points(locs, conf.op_label_scale)
+        locs_lores = rescale_points(locs, self.conf.op_label_scale)
         imsz_lores = [int(x / self.conf.op_label_scale / self.conf.op_rescale) for x in imszuse]
-        label_map_lores = heatmap.create_label_hmap(locs_lores, imsz_lores, conf.op_map_lores_blur_rad)
+        label_map_lores = heatmap.create_label_hmap(locs_lores, imsz_lores, self.conf.op_map_lores_blur_rad)
 
         # label_ims = create_label_images(locs / self.conf.op_label_scale, mask_sz, 1)  # self.conf.label_blur_rad)
         # label_ims = PoseTools.create_label_images(locs/self.conf.op_label_scale, mask_sz,1,2)
@@ -553,8 +554,8 @@ class DataIteratorTF(object):
         #                                         self.conf.label_blur_rad)
         # label_ims_origres = np.clip(label_ims_origres, 0, 1)  # AL: possibly unnec?
 
-        label_paf_lores = create_affinity_labels(locs_lores, imsz_lores, conf.op_affinity_graph,
-                                                 tubewidth=conf.op_paf_lores_tubewidth)
+        label_paf_lores = create_affinity_labels(locs_lores, imsz_lores, self.conf.op_affinity_graph,
+                                                 tubewidth=self.conf.op_paf_lores_tubewidth)
 
         npafstg = self.conf.op_paf_nstage
         nmapstg = self.conf.op_map_nstage
@@ -625,6 +626,8 @@ if __name__ == "__main__":
     #
     #
     # tf.enable_eager_execution()
+
+    print "OPD MAIN!"
 
     conf = nbHG.createconf(nbHG.lblbub, nbHG.cdir, 'cvi_outer3_easy__split0', 'bub', 'openpose', 0)
     conf.op_affinity_graph = conf.op_affinity_graph[::2]
