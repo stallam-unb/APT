@@ -74,6 +74,8 @@ class config(object):
         self.op_label_scale = 8
         self.op_map_lores_blur_rad = 1.0
         self.op_paf_lores_tubewidth = 0.95
+        self.op_paf_nstage = 5
+        self.op_map_nstage = 1
         self.n_steps = 4.41
 
         # ------ Leap params

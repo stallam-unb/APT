@@ -1,12 +1,18 @@
+import sys
 import os
 import numpy as np
 import tensorflow as tf
 import logging
 
 import matplotlib.pyplot as plt
+from itertools import islice
+import time
 
 import PoseTools
 import heatmap
+
+ISPY3 = sys.version_info >= (3, 0)
+
 
 def create_affinity_labels(locs, imsz, graph, tubewidth=1.0):
     """
@@ -317,70 +323,129 @@ def create_tf_datasets(conf):
         logging.warning("Val DB does not exist: Data for validation from:{}".format(train_db))
         val_db = train_db
 
-    if True:
+    if False:
         return create_tfrecord_dstoy(train_db)
     else:
         print "XXX NO SHUFFLE, NO DISTORT, was 5 and 8 parcalls"
-        dstrn, dstrnMD = create_tfrecord_ds(train_db, _preproc_with_distort, 1, 1, False)
+        dstrn, dstrnMD = create_tfrecord_ds(train_db, _preproc_with_distort, 5, 8, True)
         #train_ds2 = create_tfrecord_ds(train_db, _preproc_with_distort, 5, 8, True)
 
         print "XXX was 2 and 4 parcalls"
-        dsval, dsvalMD  = create_tfrecord_ds(val_db, _preproc_no_distort, 1, 1, False)
+        dsval, dsvalMD  = create_tfrecord_ds(val_db, _preproc_no_distort, 2, 4, False)
 
         return dstrn, dstrnMD, dsval, dsvalMD
 
-def viz_dataset_contents(dstvals, i, ibatch, dstmdvals=None):
+def test_dataset_with_rand():
+    def fn1(x):
+        print "foo"
+        z = tf.random_uniform((),seed=42,name='randfoo')
+        return z
+
+    # tf.set_random_seed(42)
+    # np.random.seed(42)
+
+    d1 = tf.data.Dataset.from_tensor_slices(tf.zeros(10))
+    d2 = d1.map(fn1)
+
+    d3 = d2.map(lambda x: tf.identity(x,name='idfoo'))
+    d4 = tf.data.Dataset.zip((d2, d2))
+    return d2, d3, d4
+
+def viz_dataset_contents(datavals, i, ibatch, op_af_graph, locvals=None, mdvals=None,):
     '''
 
-    :param dstvals: lists of ims, (pafs, maps)
+    :param datavals: lists of ims, (pafs, maps)
     :param i: index into x
     :param ibatch: batch index
+    :param mdvals: lists of info/metadata
+    :param locvals: lists of locs
     :return:
     '''
 
-    ims, (pafs, maps) = dstvals[i]
-    imsnp = ims.numpy()
-    pafsnp = pafs.numpy()
-    mapsnp = maps.numpy()
+    ims, pafsmaps = datavals[i]
+    assert len(ims) == 1, "Expected single-el list"
+    ims = ims[0]
+    pafs = pafsmaps[-2]
+    maps = pafsmaps[-1]
 
-    hasmd = dstmdvals is not None
+    haslocs = locvals is not None
+    hasmd = mdvals is not None
+    if haslocs:
+        locs = locvals[i]
     if hasmd:
-        locs, info = dstmdvals[i]
-        locsnp = locs.numpy()
-        infonp = info.numpy()
+        info = mdvals[i]
 
-    bsize = imsnp.shape[0]
+    bsize = ims.shape[0]
     print "Batch size is {}".format(bsize)
 
     fig1, axs1 = plt.subplots(nrows=3, ncols=6, num=1)
+    fig2, axs2 = plt.subplots(nrows=3, ncols=6, num=2)
     axs1.shape = (18,)
+    axs2.shape = (18,)
 
     plt.sca(axs1[0])
     plt.cla()
-    plt.imshow(imsnp[ibatch,:,:,0])
+    plt.imshow(ims[ibatch, :, :, 0])
+    if haslocs:
+        plt.scatter(locs[ibatch, :, 0], locs[ibatch, :, 1], c='r', marker='.')
+        print locs[ibatch, :, :]
     if hasmd:
-        plt.scatter(locsnp[ibatch,:,0], locsnp[ibatch,:,1], c='r', marker='.')
-        ttlstr = "{:.2f}/{:.2f}/{:.2f}".format(infonp[ibatch,0],info[ibatch,1],info[ibatch,2])
+        ttlstr = "{:.2f}/{:.2f}/{:.2f}".format(info[ibatch, 0], info[ibatch, 1], info[ibatch, 2])
         plt.title(ttlstr)
-        print locsnp[ibatch,:,:]
-        print infonp[ibatch,:]
+        print info[ibatch, :]
 
     for ipt in range(17):
         plt.sca(axs1[1+ipt])
         plt.cla()
-        plt.imshow(mapsnp[ibatch,:,:,ipt])
+        plt.imshow(maps[ibatch, :, :, ipt])
         ttlstr = "pt{:.2f}".format(ipt)
         plt.title(ttlstr)
-        if hasmd:
-            locs_lores = rescale_points(locsnp, 8)
-            plt.scatter(locs_lores[ibatch,ipt,0], locs_lores[ibatch,ipt,1], c='r', marker='.')
+        if haslocs:
+            locs_lores = rescale_points(locs, 8)
+            plt.scatter(locs_lores[ibatch, ipt, 0], locs_lores[ibatch, ipt, 1], c='r', marker='.')
+    plt.show()
+
+    nlimb = pafs.shape[3]/2
+    print "paf nlimbs={}".format(nlimb)
+    assert nlimb == len(op_af_graph)
+
+    for ilimb in range(nlimb):
+        ilimbx = 2*ilimb
+        ilimby = 2*ilimb + 1
+        iaxx = ilimbx+1
+        iaxy = ilimby+1
+
+        limbspec = op_af_graph[ilimb]
+        limbpt0, limbpt1 = limbspec
+
+        plt.sca(axs2[iaxx])
+        plt.cla()
+        plt.imshow(pafs[ibatch, :, :, ilimbx])
+        if haslocs:
+            plt.scatter(locs_lores[ibatch, limbpt0, 0], locs_lores[ibatch, limbpt0, 1], c='r', marker='.')
+            plt.scatter(locs_lores[ibatch, limbpt1, 0], locs_lores[ibatch, limbpt1, 1], c='r', marker='x')
+        pafxun = set(np.unique(pafs[ibatch, :, :, ilimbx]))
+        pafxun.remove(0.0)
+        ttlstr = "{} {}: {}".format(limbspec, 'x', tuple(pafxun))
+        plt.title(ttlstr)
+
+        plt.sca(axs2[iaxy])
+        plt.cla()
+        plt.imshow(pafs[ibatch, :, :, ilimby])
+        if haslocs:
+            plt.scatter(locs_lores[ibatch, limbpt0, 0], locs_lores[ibatch, limbpt0, 1], c='r', marker='.')
+            plt.scatter(locs_lores[ibatch, limbpt1, 0], locs_lores[ibatch, limbpt1, 1], c='r', marker='x')
+        pafyun = set(np.unique(pafs[ibatch, :, :, ilimby]))
+        pafyun.remove(0.0)
+        ttlstr = "{} {}: {}".format(limbspec, 'y', tuple(pafyun))
+        plt.title(ttlstr)
 
     plt.show()
 
 
 class DataIteratorTF(object):
 
-    def __init__(self, conf, db_type, distort, shuffle):
+    def __init__(self, conf, db_type, distort, shuffle, debug=False):
         self.conf = conf
         if db_type == 'val':
             filename = os.path.join(self.conf.cachedir, self.conf.valfilename) + '.tfrecords'
@@ -396,6 +461,7 @@ class DataIteratorTF(object):
         self.vec_num = len(conf.op_affinity_graph)
         self.heat_num = self.conf.n_classes
         self.N = PoseTools.count_records(filename)
+        self.debug = debug
 
     def reset(self):
         if self.iterator:
@@ -424,6 +490,7 @@ class DataIteratorTF(object):
 
         all_ims = []
         all_locs = []
+        all_info = []
         for b_ndx in range(self.batch_size):
             # AL: this 'shuffle' seems weird
             n_skip = np.random.randint(30) if self.shuffle else 0
@@ -446,24 +513,62 @@ class DataIteratorTF(object):
                 trx_ndx = int(example.features.feature['trx_ndx'].int64_list.value[0])
             else:
                 trx_ndx = 0
+            info = np.array([expid, t, trx_ndx])
+
             all_ims.append(reconstructed_img)
             all_locs.append(locs)
+            all_info.append(info)
 
         ims = np.stack(all_ims)  # [bsize x height x width x depth]
         locs = np.stack(all_locs)  # [bsize x ncls x 2]
+        info = np.stack(all_info)  # [bsize x 3]
+
+        assert self.conf.op_rescale == 1, \
+            "Need further mods/corrections below for op_rescale~=1"
+        assert self.conf.op_label_scale == 8, \
+            "Expected openpose scale of 8"  # Any value should be ok tho
+
+        ims, locs = PoseTools.preprocess_ims(ims, locs, self.conf,
+                                             self.distort, self.conf.op_rescale)
+        # locs has been rescaled per op_rescale (but not op_label_scale)
 
         imszuse = self.conf.imszuse
         (imnr_use, imnc_use) = imszuse
         ims = ims[:, 0:imnr_use, 0:imnc_use, :]
 
-        if self.conf.img_dim == 1:
-            assert ims.shape[-1] == 1, "Expected image depth of 1"
-            ims = np.tile(ims, 3)
+        #if self.conf.img_dim == 1:
+        #    assert ims.shape[-1] == 1, "Expected image depth of 1"
+        #    ims = np.tile(ims, 3)
 
-        assert self.conf.op_rescale == 1, \
-            "Need further mods/corrections below for op_rescale~=1"
+        # locs -> PAFs, MAP
+        locs_lores = rescale_points(locs, conf.op_label_scale)
+        imsz_lores = [int(x / self.conf.op_label_scale / self.conf.op_rescale) for x in imszuse]
+        label_map_lores = heatmap.create_label_hmap(locs_lores, imsz_lores, conf.op_map_lores_blur_rad)
+
+        # label_ims = create_label_images(locs / self.conf.op_label_scale, mask_sz, 1)  # self.conf.label_blur_rad)
+        # label_ims = PoseTools.create_label_images(locs/self.conf.op_label_scale, mask_sz,1,2)
+        # label_ims = np.clip(label_ims, 0, 1)  # AL: possibly unnec?
+
+        # label_ims_origres = create_label_images(locs, mask_sz_origres,
+        #                                         self.conf.label_blur_rad)
+        # label_ims_origres = np.clip(label_ims_origres, 0, 1)  # AL: possibly unnec?
+
+        label_paf_lores = create_affinity_labels(locs_lores, imsz_lores, conf.op_affinity_graph,
+                                                 tubewidth=conf.op_paf_lores_tubewidth)
+
+        npafstg = self.conf.op_paf_nstage
+        nmapstg = self.conf.op_map_nstage
+        targets = [label_paf_lores,] * npafstg + [label_map_lores,] * nmapstg
+        
+        if self.debug:
+            return [ims], targets, locs, info
+        else:
+            return [ims], targets
+            # (inputs, targets)
+
+
         # Don't compute just locs/op_rescale etc
-        mask_sz = [int(x / self.conf.op_label_scale / self.conf.op_rescale) for x in imszuse]
+        #mask_sz = [int(x / self.conf.op_label_scale / self.conf.op_rescale) for x in imszuse]
         # mask_sz1 = [self.batch_size,] + mask_sz + [2*self.vec_num]
         # mask_sz2 = [self.batch_size,] + mask_sz + [self.heat_num]
         # mask_im1 = np.ones(mask_sz1)
@@ -474,11 +579,6 @@ class DataIteratorTF(object):
         # mask_im1_origres = np.ones(mask_sz1_origres)
         # mask_im2_origres = np.ones(mask_sz2_origres)
 
-        ims, locs = PoseTools.preprocess_ims(ims, locs, self.conf,
-                                             self.distort, self.conf.op_rescale)
-        # locs has been rescaled per op_rescale (but not op_label_scale)
-
-        return ims, locs
 
         '''
         label_ims = create_label_images(locs/self.conf.op_label_scale, mask_sz, 1) #self.conf.label_blur_rad)
@@ -497,14 +597,6 @@ class DataIteratorTF(object):
                                                       self.conf.op_affinity_graph,
                                                       self.conf.label_blur_rad)
 
-        return [ims, mask_im1, mask_im2, mask_im1_origres, mask_im2_origres], \
-               [affinity_ims, label_ims,
-                affinity_ims, label_ims,
-                affinity_ims, label_ims,
-                affinity_ims, label_ims,
-                affinity_ims, label_ims,
-                affinity_ims_origres, label_ims_origres]
-        # (inputs, targets)
 
         '''
 
@@ -518,24 +610,64 @@ class DataIteratorTF(object):
 if __name__ == "__main__":
     import nbHG
 
-    tf.enable_eager_execution()
+
+    # class Timer(object):
+    #     def __init__(self, name=None):
+    #         self.name = name
+    #
+    #     def __enter__(self):
+    #         self.tstart = time.time()
+    #
+    #     def __exit__(self, type, value, traceback):
+    #         if self.name:
+    #             print('[%s]' % self.name,)
+    #         print('Elapsed: %s' % (time.time() - self.tstart))
+    #
+    #
+    # tf.enable_eager_execution()
 
     conf = nbHG.createconf(nbHG.lblbub, nbHG.cdir, 'cvi_outer3_easy__split0', 'bub', 'openpose', 0)
-    conf.imszuse = (180,180)
-    #dst, dstmd, dsv, dsvmd = create_tf_datasets(conf)
-    ds1, ds2, ds3 = create_tf_datasets(conf)
+    conf.op_affinity_graph = conf.op_affinity_graph[::2]
+    conf.imszuse = (180, 180)
+    # dst, dstmd, dsv, dsvmd = create_tf_datasets(conf)
+    ditrn = DataIteratorTF(conf, 'train', True, True, debug=True)
+    dival = DataIteratorTF(conf, 'val', False, False, debug=True)
 
-    if True:
-        x1 = [x for x in ds1.take(10)]
-        x2 = [x for x in ds2.take(10)]
-        x3 = [x for x in ds3.take(10)]
-        #locs10 = [x for x in dslocsinfo.take(10)]
+    xtrn = [x for x in islice(ditrn,5)]
+    xval = [x for x in islice(dival,5)]
 
-    else:
-        dst10 = [x for x in dst.take(1)]
-        dst10md = [x for x in dstmd.take(1)]
-        dsv10 = [x for x in dsv.take(1)]
-        dsv10md = [x for x in dsvmd.take(1)]
+    imstrn, pafsmapstrn, locstrn, mdtrn = zip(*xtrn)
+    mdlintrn = zip(imstrn, pafsmapstrn)
+
+    imsval, pafsmapsval, locsval, mdval = zip(*xval)
+    mdlinval = zip(imsval, pafsmapsval)
+
+    #ds1, ds2, ds3 = create_tf_datasets(conf)
+    #
+    #
+    # if True:
+    #     x1 = [x for x in ds1.take(10)]
+    #     x2 = [x for x in ds2.take(10)]
+    #     x3 = [x for x in ds3.take(10)]
+    #     #locs10 = [x for x in dslocsinfo.take(10)]
+    # else:
+    #     dst10 = [x for x in dst.take(1)]
+    #     dst10md = [x for x in dstmd.take(1)]
+    #     dsv10 = [x for x in dsv.take(1)]
+    #     dsv10md = [x for x in dsvmd.take(1)]
+
+    # N = 100
+    # with Timer('tf.data'):
+    #     xds = [x for x in dst.take(N)]
+    # with Timer('it'):
+    #     xit = []
+    #     for i in range(N):
+    #         xit.append(ditrn.next())
+
+
+
+    # ds2,ds3,ds4 = test_dataset_with_rand()
+
 
 
 
