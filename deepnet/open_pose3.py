@@ -180,7 +180,6 @@ def get_training_model(imszuse, wd_kernel, nPAFstg=5, nMAPstg=1, nlimbsT2=38, np
 
     assert len(xpaflist) == nPAFstg
     assert len(xmaplist) == nMAPstg
-
     outputs = xpaflist + xmaplist
 
     # w1 = apply_mask(stage1_branch1_out, paf_weight_input, 1, 1)
@@ -217,56 +216,57 @@ def configure_losses(model, bsize):
 
     return losses, loss_weights
 
-def get_testing_model(imszuse, nlimb=38, npts=19, fullpred=False):
-    stages = 6
+def get_testing_model(imszuse, nPAFstg=5, nMAPstg=1, nlimbsT2=38, npts=19, fullpred=False):
+    '''
+    See get_training_model
+    :param imszuse:
+    :param nPAFstg:
+    :param nMAPstg:
+    :param nlimbsT2:
+    :param npts:
+    :param fullpred:
+    :return:
+    '''
 
     imnruse, imncuse = imszuse
     assert imnruse % 8 == 0, "Image size must be divisible by 8"
     assert imncuse % 8 == 0, "Image size must be divisible by 8"
-    img_input_shape = imszuse + (3,)
+    imszvgg = (imnruse/8, imncuse/8)  # imsz post VGG ftrs
 
-    img_input = Input(shape=img_input_shape, name='input_img')
+    img_input = Input(shape=imszuse + (3,), name='input_img')
 
     img_normalized = Lambda(lambda x: x / 256 - 0.5)(img_input) # [-0.5, 0.5]
 
-    outputsfull = []
-
     # VGG
-    stage0_out = vgg_block(img_normalized, None)
+    vggF = op2.vgg_block(img_normalized, None)
+    # sz should be (bsize, imszvgg[0], imszvgg[1], nchans)
+    print vggF.shape.as_list()[1:]
+    assert vggF.shape.as_list()[1:] == list(imszvgg + (128,))
 
-    # stage 1 - branch 1 (PAF)
-    stage1_branch1_out = stage1_block(stage0_out, nlimb, 1, None)
+    # PAF 1..nPAFstg
+    xpaflist = []
+    xstagein = vggF
+    for iPAFstg in range(nPAFstg):
+        xstageout = stageCNN(xstagein, nlimbsT2, 'paf', iPAFstg, None)
+        xpaflist.append(xstageout)
+        xstagein = Concatenate(name="paf-stg{}".format(iPAFstg))([vggF, xstageout])
 
-    # stage 1 - branch 2 (confidence maps)
-    stage1_branch2_out = stage1_block(stage0_out, npts, 2, None)
+    # MAP
+    xmaplist = []
+    for iMAPstg in range(nMAPstg):
+        xstageout = stageCNN(xstagein, npts, 'map', iMAPstg, None)
+        xmaplist.append(xstageout)
+        xstagein = Concatenate(name="map-stg{}".format(iMAPstg))([vggF, xpaflist[-1], xstageout])
 
-    outputsfull.append(stage1_branch1_out)
-    outputsfull.append(stage1_branch2_out)
-
-    x = Concatenate()([stage1_branch1_out, stage1_branch2_out, stage0_out])
-
-    # stage t >= 2
-    stageT_branch1_out = None
-    stageT_branch2_out = None
-    for sn in range(2, stages):
-        stageT_branch1_out = stageT_block(x, nlimb, sn, 1, None)
-        stageT_branch2_out = stageT_block(x, npts, sn, 2, None)
-        outputsfull.append(stageT_branch1_out)
-        outputsfull.append(stageT_branch2_out)
-        x = Concatenate()([stageT_branch1_out, stageT_branch2_out, stage0_out])
-
-    # stage sn=stages
-    # AL: passing None into weight_decay(s) doesn't make sense; since it's the test model it's prob ok
-    stageT_branch1_out = stageTdeconv_block(x, nlimb, stages, 1, None, None, 0)
-    stageT_branch2_out = stageTdeconv_block(x, npts, stages, 2, None, None, 0)
-
-    outputsfull.append(stageT_branch1_out)
-    outputsfull.append(stageT_branch2_out)
+    assert len(xpaflist) == nPAFstg
+    assert len(xmaplist) == nMAPstg
 
     if fullpred:
-        model = Model(inputs=[img_input], outputs=outputsfull)
+        outputs = xpaflist + xmaplist
+        model = Model(inputs=[img_input], outputs=outputs)
     else:
-        model = Model(inputs=[img_input], outputs=[stageT_branch1_out, stageT_branch2_out])
+        outputs = [xpaflist[-1], xmaplist[-1], ]
+        model = Model(inputs=[img_input], outputs=outputs)
 
     return model
 
@@ -324,6 +324,7 @@ def imszcheckcrop(sz, dimname):
 def dot(K, L):
    assert len(K) == len(L), 'lens do not match: {} vs {}'.format(len(K), len(L))
    return sum(i[0] * i[1] for i in zip(K, L))
+
 
 def training(conf, name='deepnet'):
 
@@ -517,7 +518,9 @@ def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
     conf.imszuse = imszuse
 
     model = get_testing_model(imszuse,
-                              nlimb=len(conf.op_affinity_graph) * 2,
+                              nPAFstg=conf.op_paf_nstage,
+                              nMAPstg=conf.op_map_nstage,
+                              nlimbsT2=len(conf.op_affinity_graph) * 2,
                               npts=conf.n_classes,
                               fullpred=rawpred)
     if model_file is None:
@@ -530,49 +533,87 @@ def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
     # thre2 = conf.get('op_param_paf_thres',0.05)
 
     def pred_fn(all_f):
-        all_f = all_f[:, 0:imnr_use, 0:imnc_use, :]
 
-        if all_f.shape[3] == 1:
-            all_f = np.tile(all_f,[1,1,1,3])
-        # tiling beforehand a little weird as preprocess_ims->normalizexyxy branches on
-        # if img is color
-        xs, _ = PoseTools.preprocess_ims(
-            all_f, in_locs=np.zeros([conf.batch_size, conf.n_classes, 2]), conf=conf,
-            distort=False, scale=conf.op_rescale)
-        model_preds = model.predict(xs)
+        assert conf.op_rescale == 1  # for now
+        assert all_f.shape[0] == conf.batch_size
+
+        locs_sz = (conf.batch_size, conf.n_classes, 2)
+
+        # mirror open_pose_data/DataIteratorTF
+
+        ims, _ = PoseTools.preprocess_ims(
+            all_f,
+            in_locs=np.zeros(locs_sz),
+            conf=conf,
+            distort=False,
+            scale=conf.op_rescale)
+
+        ims = ims[:, 0:imnr_use, 0:imnc_use, :]
+
+        assert conf.img_dim == ims.shape[-1]
+        if conf.img_dim == 1:
+            ims = np.tile(ims, 3)
+
+        model_preds = model.predict(ims)
         # all_infered = []
         # for ex in range(xs.shape[0]):
         #     infered = do_inference(model_preds[-1][ex,...],model_preds[-2][ex,...],conf, thre1, thre2)
         #     all_infered.append(infered)
-        pred = model_preds[-1]
-        raw_locs = PoseTools.get_pred_locs(pred)
-        raw_locs = raw_locs * conf.op_rescale  # * conf.op_label_scale
+        predhm = model_preds[-1]  # this is always the last/final MAP hmap
+
+        if np.any(predhm < 0.0):
+            PTILES = [1, 5, 10, 50, 99]
+            ptls = np.percentile(predhm, PTILES)
+            warnstr = 'Prediction heatmap has negative els! PTILES {}: {}'.format(PTILES, ptls)
+            logging.warning(warnstr)
+
+            predhm_clip = predhm.copy()
+            predhm_clip[predhm_clip < 0.0] = 0.0
+        else:
+            predhm_clip = predhm
+
+        # (bsize, npts, 2), (x,y), 0-based
+        predlocs_argmax = PoseTools.get_pred_locs(predhm)
+        predlocs_wgtcnt = heatmap.get_weighted_centroids(predhm_clip,
+                                                         floor=conf.op_hmpp_floor,
+                                                         nclustermax=conf.op_hmpp_nclustermax)
+        assert predlocs_argmax.shape == locs_sz
+        assert predlocs_wgtcnt.shape == locs_sz
+        print "HMAP POSTPROC, floor={}, nclustermax={}".format(conf.op_hmpp_floor, conf.op_hmpp_nclustermax)
+
+        predlocs_argmax_hires = opdata.unscale_points(predlocs_argmax, conf.op_label_scale)
+        predlocs_wgtcnt_hires = opdata.unscale_points(predlocs_wgtcnt, conf.op_label_scale)
+
+        assert conf.op_rescale == 1  # we are not rescaling by this
+
         # base_locs = np.array(all_infered)*conf.op_rescale
         # nanidx = np.isnan(base_locs)
         # base_locs[nanidx] = raw_locs[nanidx]
-        base_locs = raw_locs
+
         ret_dict = {}
-        ret_dict['locs'] = base_locs
-        ret_dict['hmaps'] = pred
-        ret_dict['conf'] = np.max(pred, axis=(1, 2))
+        ret_dict['locs'] = predlocs_wgtcnt_hires
+        ret_dict['locs_mdn'] = predlocs_argmax_hires  # XXX hack for now
+        ret_dict['locs_unet'] = predlocs_argmax_hires  # XXX hack for now
+        ret_dict['conf'] = np.max(predhm, axis=(1, 2))
+        ret_dict['conf_unet'] = np.max(predhm, axis=(1, 2)) # XXX hack
         return ret_dict
 
-    def pred_fn_rawmaps(all_f):
-        all_f = all_f[:, 0:imnr_use, 0:imnc_use, :]
-
-        if all_f.shape[3] == 1:
-            all_f = np.tile(all_f,[1,1,1,3])
-        # tiling beforehand a little weird as preprocess_ims->normalizexyxy branches on
-        # if img is color
-        xs, _ = PoseTools.preprocess_ims(
-            all_f, in_locs=np.zeros([conf.batch_size, conf.n_classes, 2]), conf=conf,
-            distort=False, scale=conf.op_rescale)
-        model_preds = model.predict(xs)
-        # all_infered = []
-        # for ex in range(xs.shape[0]):
-        #     infered = do_inference(model_preds[-1][ex,...],model_preds[-2][ex,...],conf, thre1, thre2)
-        #     all_infered.append(infered)
-        return model_preds
+    # def pred_fn_rawmaps(all_f):
+    #     all_f = all_f[:, 0:imnr_use, 0:imnc_use, :]
+    #
+    #     if all_f.shape[3] == 1:
+    #         all_f = np.tile(all_f,[1,1,1,3])
+    #     # tiling beforehand a little weird as preprocess_ims->normalizexyxy branches on
+    #     # if img is color
+    #     xs, _ = PoseTools.preprocess_ims(
+    #         all_f, in_locs=np.zeros([conf.batch_size, conf.n_classes, 2]), conf=conf,
+    #         distort=False, scale=conf.op_rescale)
+    #     model_preds = model.predict(xs)
+    #     # all_infered = []
+    #     # for ex in range(xs.shape[0]):
+    #     #     infered = do_inference(model_preds[-1][ex,...],model_preds[-2][ex,...],conf, thre1, thre2)
+    #     #     all_infered.append(infered)
+    #     return model_preds
 
 
     def close_fn():
@@ -581,10 +622,10 @@ def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
         # del model
 
     if rawpred:
+        assert False, "unsupported"
         return pred_fn_rawmaps, close_fn, latest_model_file
     else:
         return pred_fn, close_fn, latest_model_file
-
 
 
 def do_inference(hmap, paf, conf, thre1, thre2):

@@ -7,6 +7,7 @@ import pickle
 import heatmap
 
 import numpy as np
+import ast
 
 import run_apt_expts as rapt
 import apt_expts as apt_expts
@@ -18,8 +19,10 @@ import PoseTools
 gpu_model = 'GeForceRTX2080Ti'
 
 all_models = ['mdn', 'deeplabcut', 'unet', 'leap', 'openpose', 'resnet_unet', 'hg']
+cdir = '/groups/branson/home/leea30/apt/openpose_refinement_20190721/cdir20190909_op3'
 #cache_dir = '/groups/branson/home/leea30/apt/posebase20190528/cache_20190702_hgrfn_long'
 #run_dir = '/groups/branson/home/leea30/apt/posebase20190528/out_20190702_hgrfn_long'
+run_dir = '/groups/branson/home/leea30/apt/openpose_refinement_20190721/out20190909_op3'
 #apt_deepnet_root = '/groups/branson/home/leea30/git/aptFtrDT/deepnet'
 apt_deepnet_root = '/groups/branson/home/leea30/git/aptDev2/deepnet'
 
@@ -33,9 +36,11 @@ cvishH = '/groups/branson/home/leea30/apt/openpose_refinement_20190721/cvi_sh_45
 
 op_af_graph_bub = '\(0,1\),\(0,2\),\(0,3\),\(0,4\),\(0,5\),\(5,6\),\(5,7\),\(5,9\),\(9,16\),\(9,10\),\(10,15\),\(9,14\),\(7,11\),\(7,8\),\(8,12\),\(7,13\)'
 
+# op_af_graph_bub_debug = '\(0,1\),\(0,3\),\(0,5\),\(5,7\),\(9,16\),\(10,15\),\(7,11\),\(8,12\)'
+
 op_af_graph_bub_noslash = op_af_graph_bub.replace('\\', '')
 
-# nbHG.cv_train_from_mat(nbHG.lblbub,nbHG.cvibub,['openpose'])
+# nbHG.cv_train_from_mat(nbHG.lblbub,cdir,nbHG.cvibub,['openpose'])
 # nbHG.run_training(nbHG.lblbub,cdir,'cvi_outer3_easy__split0','bub','openpose',0,'submit',**opts)
 # nbHG.save_cv_results(nbHG.lblbub,cdir,0,'cvi_outer3_easy__split0','openpose',mdlS,nbHG.run_dir,'bub','kwresfile')
 # nbHG.predsingle(nbHG.lblbub, nbHG.cache_dir, 0, 'cvi_outer3_easy__split0', 'openpose', mdlS, 'bub'):
@@ -229,6 +234,47 @@ def run_training(lbl_file, cdir, exp_name, data_type, train_type, view, run_type
         conf = apt.create_conf(lbl_file, view, exp_name, cdir, train_type)
         check_train_status(cmd_name, conf.cachedir)
 
+def createconf(lbl_file, cdir, exp_name, data_type, net, view, **kwargs):
+    '''
+
+    :param lbl_file:
+    :param cdir:
+    :param exp_name:
+    :param data_type:
+    :param net:
+    :param view: 0b
+    :param kwargs:
+    :return:
+    '''
+
+    conf_opts = rapt.common_conf.copy()
+    # conf_opts.update(other_conf[conf_id])
+    conf_opts['save_step'] = conf_opts['dl_steps'] / 10
+    for k in kwargs.keys():
+        conf_opts[k] = kwargs[k]
+
+    if net == 'openpose':
+        if data_type == 'bub':
+            conf_opts['op_affinity_graph'] = op_af_graph_bub
+        else:
+            assert False, "define aff graph"
+
+    # confoptslist = []
+    # for k in conf_opts.keys():
+    #     confoptslist.append([str(k), str(conf_opts[k])])
+    # Avoid parsing issues, going thru create_conf requires round-tripping thru printf/argparse
+
+    conf = apt.create_conf(lbl_file, view, exp_name, cdir, net)
+
+    for k in conf_opts.keys():
+        v = conf_opts[k]
+        if isinstance(v, str):
+            v = v.replace('\\', '')
+            v = ast.literal_eval(v)
+        print('Overriding param %s <= ' % k, v)
+        setattr(conf, k, v)
+
+    return conf
 
 def save_cv_results(lbl_file, cachedir, view, exp_name, net, model_file_short, out_dir,
                     data_type, kwout, mdn_hm_floor=0.1, db_file=None):
@@ -368,7 +414,7 @@ import os
 import pickle
 import numpy as np
 import pathlib2
-import open_pose as op
+import open_pose3 as op3
 
 rootdir = '/groups/branson/home/leea30/apt/openpose_refinement_20190721/'
 cdirs = { \
@@ -557,7 +603,7 @@ opts = {'label_blur_rad': 3,
 
 cache_dir = '/groups/branson/home/leea30/apt/openpose_refinement_20190721/cdir20190813_60k_lbr3_initDCupsamp_noWD_wtfacsadj2'
 #run_dir = '/groups/branson/home/leea30/apt/openpose_refinement_20190721/out20190813_60k_lbr3_initDCupsamp_noWD_wtfacsadj2'
-run_dir = '/groups/branson/home/leea30/apt/openpose_refinement_20190721/out20190813_60k_cmp'
+#run_dir  '/groups/branson/home/leea30/apt/openpose_refinement_20190721/out20190813_60k_cmp'
 mdlS = 'deepnet-60000'
 
 # And the models are in /nrs/branson/mayank/apt_cache/multitarget_bubble/mdn/view_0/apt_expt

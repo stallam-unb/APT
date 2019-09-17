@@ -34,7 +34,15 @@ def compactify_hmap_gaussian_test():
     return ((muobs,sigobs,A,err),(muobs2,sigobs2,A2,err2),(muobs3,sigobs3,A3,err3))
 
 def compactify_hmap(hm, floor=0.0, nclustermax=5):
-    # mu: for romain, if hm is (720,540), then mu[0] is x
+    '''
+
+    :param hm:
+    :param floor:
+    :param nclustermax:
+    :return:
+         mu: (2, nclustermax). Each col is (row,col) weighted centroid, 1-based
+
+    '''
 
     assert np.all(hm >= 0.)
     if floor > 0.0:
@@ -86,6 +94,31 @@ def compactify_hmap_arr(hmagg,offset=1.0,floor=0.0):
     print "Took {} s to compactify".format(toc)
 
     return mus, sigs, As
+
+def get_weighted_centroids(hm, floor=0.0, nclustermax=5):
+    '''
+    Get predicted loc from hmap as weighted centroid (vs argmax).
+
+
+    :param hm: (bsize, nr, nc, npts)
+    :param floor: see compactify_hmap
+    :param nclustermax: see compactify_hmap
+    :return: (bsize, npts, 2) (x,y) weighted centroids, 0-based
+    '''
+
+    assert np.all(hm >= 0.0), "Heatmap must be positive semi-def"
+    bsize, nr, nc, npts = hm.shape
+
+    hmmu = np.zeros((bsize, npts, 2))
+    for ib in range(bsize):
+        for ipt in range(npts):
+            _, mutmp, _ = compactify_hmap(hm[ib, :, :, ipt],
+                                          floor=floor,
+                                          nclustermax=nclustermax)
+            # Convert to (x,y), 0-based
+            hmmu[ib, ipt, :] = mutmp[::-1].flatten() - 1.0
+
+    return hmmu
 
 def create_label_hmap(locs, imsz, sigma, clip=0.05):
     """

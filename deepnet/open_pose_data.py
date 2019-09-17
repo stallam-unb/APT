@@ -131,22 +131,35 @@ def create_affinity_labels(locs, imsz, graph, tubewidth=1.0):
 #     return label_ims
 
 
-def rescale_points(locs, scale):
+def rescale_points(locs_hires, scale):
     '''
     Rescale (x/y) points to a lower res
 
-    :param locs: (nbatch x npts x 2) (x,y) locs, 0-based. (0,0) is the center of the upper-left pixel.
+    :param locs_hires: (nbatch x npts x 2) (x,y) locs, 0-based. (0,0) is the center of the upper-left pixel.
     :param scale: downsample factor. eg if 2, the image size is cut in half
-    :return: locsrs (nbatch x npts x 2) (x,y) locs, 0-based, rescaled
+    :return: (nbatch x npts x 2) (x,y) locs, 0-based, rescaled (lo-res)
     '''
 
-    bsize, npts, d = locs.shape
+    bsize, npts, d = locs_hires.shape
     assert d == 2
-    assert issubclass(locs.dtype.type, np.floating)
+    assert issubclass(locs_hires.dtype.type, np.floating)
+    locs_lores = (locs_hires - float(scale - 1) / 2) / scale
+    return locs_lores
 
-    locsrs = (locs - float(scale - 1) / 2) / scale
+def unscale_points(locs_lores, scale):
+    '''
+    Undo rescale_points
 
-    return locsrs
+    :param locs_lores:
+    :param scale:
+    :return:
+    '''
+
+    bsize, npts, d = locs_lores.shape
+    assert d == 2
+    assert issubclass(locs_lores.dtype.type, np.floating)
+    locs_hires = float(scale) * (locs_lores + 0.5) - 0.5
+    return locs_hires
 
 # tf.data
 
