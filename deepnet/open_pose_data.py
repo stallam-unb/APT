@@ -473,6 +473,8 @@ class DataIteratorTF(object):
         self.batch_size = self.conf.batch_size
         self.vec_num = len(self.conf.op_affinity_graph)
         self.heat_num = self.conf.n_classes
+        #self.hires_do = conf.op_hires
+        #self.hires_ndeconv = conf.op_hires_ndeconv
         self.N = PoseTools.count_records(filename)
         self.debug = debug
 
@@ -555,9 +557,13 @@ class DataIteratorTF(object):
             ims = np.tile(ims, 3)
 
         # locs -> PAFs, MAP
+        dc_scale = self.conf.op_hires_ndeconv**2
         locs_lores = rescale_points(locs, self.conf.op_label_scale)
+        locs_hires = rescale_points(locs, self.conf.op_label_scale // dc_scale)
         imsz_lores = [int(x / self.conf.op_label_scale / self.conf.op_rescale) for x in imszuse]
+        imsz_hires = [int(x / self.conf.op_label_scale * dc_scale / self.conf.op_rescale) for x in imszuse]
         label_map_lores = heatmap.create_label_hmap(locs_lores, imsz_lores, self.conf.op_map_lores_blur_rad)
+        label_map_hires = heatmap.create_label_hmap(locs_hires, imsz_hires, self.conf.op_map_hires_blur_rad)
 
         # label_ims = create_label_images(locs / self.conf.op_label_scale, mask_sz, 1)  # self.conf.label_blur_rad)
         # label_ims = PoseTools.create_label_images(locs/self.conf.op_label_scale, mask_sz,1,2)
@@ -573,6 +579,8 @@ class DataIteratorTF(object):
         npafstg = self.conf.op_paf_nstage
         nmapstg = self.conf.op_map_nstage
         targets = [label_paf_lores,] * npafstg + [label_map_lores,] * nmapstg
+        if self.conf.op_hires:
+            targets.append(label_map_hires)
         
         if self.debug:
             return [ims], targets, locs, info

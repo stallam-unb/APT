@@ -86,6 +86,43 @@ def stageCNN(x, nfout, stagety, stageidx, wd_kernel,
     x = prelu(x, "{}-stg{}-1by1-2-prelu".format(stagety, stageidx))
     return x
 
+def stageCNNwithDeconv(x, nfout, stagety, stageidx, wd_kernel,
+                       nfconvblock=128, nconvblocks=5, ndeconvs=2, nf1by1=128):
+    '''
+    Like stageCNN, but with ndeconvs Deconvolutions to increase imsz by 2**ndeconvs
+    :param x:
+    :param nfout:
+    :param stagety:
+    :param stageidx:
+    :param wd_kernel:
+    :param nfconvblock:
+    :param nconvblocks:
+    :param ndeconvs:
+    :param nfdeconv:
+    :param nf1by1:
+    :return:
+    '''
+
+    for iCB in range(nconvblocks):
+        namebase = "{}-stg{}-cb{}".format(stagety, stageidx, iCB)
+        x = convblock(x, nfconvblock, namebase, wd_kernel)
+
+    nfilt = x.shape.as_list()[-1]
+    logging.info("Adding {} deconvs with nfilt={}".format(ndeconvs, nfilt))
+
+    DCFILTSZ = 4
+    for iDC in range(ndeconvs):
+        dcname = "{}-stg{}-dc{}".format(stagety, stageidx, iDC)
+        x = op2.deconv_2x_upsampleinit(x, nfilt, DCFILTSZ, dcname, None, 0)
+        x = prelu(x, "{}-prelu".format(dcname))
+
+    x = conv(x, nf1by1, 1, "{}-stg{}-1by1-1".format(stagety, stageidx), (wd_kernel, 0))
+    x = prelu(x, "{}-stg{}-postDC-1by1-1-prelu".format(stagety, stageidx))
+    x = conv(x, nfout, 1, "{}-stg{}-1by1-2".format(stagety, stageidx), (wd_kernel, 0))
+    x = prelu(x, "{}-stg{}-postDC-1by1-2-prelu".format(stagety, stageidx))
+    return x
+
+'''
 def stageTdeconv_block(x, num_p, stage, branch, weight_decay, weight_decay_dc, weight_decay_mode):
     x = conv(x, 128, 7, "Mconv1_stage%d_L%d" % (stage, branch), (weight_decay, 0))
     x = relu(x)
@@ -107,13 +144,14 @@ def stageTdeconv_block(x, num_p, stage, branch, weight_decay, weight_decay_dc, w
     x = relu(x)
     x = conv(x, num_p, 1, "Mconv7_stage%d_L%d" % (stage, branch), (weight_decay, 0))
     return x
+'''
 
 def apply_mask(x, mask, stage, branch):
     w_name = "weight_stage%d_L%d" % (stage, branch)
     w = Multiply(name=w_name)([x, mask])  # vec_weight
     return w
 
-def get_training_model(imszuse, wd_kernel, nPAFstg=5, nMAPstg=1, nlimbsT2=38, npts=19):
+def get_training_model(imszuse, wd_kernel, nPAFstg=5, nMAPstg=1, nlimbsT2=38, npts=19, doDC=True, nDC=2):
     '''
 
     :param imszuse: (imnr, imnc) raw image size, possibly adjusted to be 0 mod 8
@@ -178,9 +216,15 @@ def get_training_model(imszuse, wd_kernel, nPAFstg=5, nMAPstg=1, nlimbsT2=38, np
         xmaplist.append(xstageout)
         xstagein = Concatenate(name="map-stg{}".format(iMAPstg))([vggF, xpaflist[-1], xstageout])
 
+    xmaplistDC = []
+    if doDC:
+        # xstagein is ready/good from MAP loop
+        xstageout = stageCNNwithDeconv(xstagein, npts, 'map', nMAPstg, wd_kernel, ndeconvs=nDC)
+        xmaplistDC.append(xstageout)
+
     assert len(xpaflist) == nPAFstg
     assert len(xmaplist) == nMAPstg
-    outputs = xpaflist + xmaplist
+    outputs = xpaflist + xmaplist + xmaplistDC
 
     # w1 = apply_mask(stage1_branch1_out, paf_weight_input, 1, 1)
     # w2 = apply_mask(stage1_branch2_out, map_weight_input, 1, 2)
@@ -188,19 +232,25 @@ def get_training_model(imszuse, wd_kernel, nPAFstg=5, nMAPstg=1, nlimbsT2=38, np
     model = Model(inputs=inputs, outputs=outputs)
     return model
 
-def configure_losses(model, bsize):
+def configure_losses(model, bsize, dc_on=True, dcNum=None, dc_blur_rad_ratio=None, dc_wtfac=None):
     '''
-
-    :param model:
-    :param bsize:
+    
+    :param model: 
+    :param bsize: 
+    :param dc_on: True if deconv/hires is on
+    :param dcNum: number of 2x deconvs applied 
+    :param dc_blur_rad_ratio: The ratio blur_rad_hires/blur_rad_lores
+    :param dc_wtfac: Weighting factor for hi-res
+    
     :return: losses, loss_weights. both dicts whose keys are .names of model.outputs
     '''
 
     def eucl_loss(x, y):
-        return K.sum(K.square(x - y)) / bsize / 2  # not sure why norm by bsize nec
+        return K.sum(K.square(x - y)) / bsize / 2.  # not sure why norm by bsize nec
 
     losses = {}
     loss_weights = {}
+    loss_weights_vec = []
 
     outs = model.outputs
     lyrs = model.layers
@@ -211,12 +261,20 @@ def configure_losses(model, bsize):
         assert len(olyrname) == 1, "Found multiple layers for output."
         key = olyrname[0]
         losses[key] = eucl_loss
-        loss_weights[key] = 1.0
-        logging.info('Configured loss for output name {}'.format(key))
 
-    return losses, loss_weights
+        if "postDC" in key:
+            assert dc_on, "Found post-deconv layer"
+            # left alone, L2 loss will be ~dc_blur_rad_ratio**2 larger for hi-res wrt lo-res
+            loss_weights[key] = float(dc_wtfac) / float(dc_blur_rad_ratio)**2
+        else:
+            loss_weights[key] = 1.0
 
-def get_testing_model(imszuse, nPAFstg=5, nMAPstg=1, nlimbsT2=38, npts=19, fullpred=False):
+        logging.info('Configured loss for output name {}, loss_weight={}'.format(key, loss_weights[key]))
+        loss_weights_vec.append(loss_weights[key])
+
+    return losses, loss_weights, loss_weights_vec
+
+def get_testing_model(imszuse, nPAFstg=5, nMAPstg=1, nlimbsT2=38, npts=19, doDC=True, nDC=2, fullpred=False):
     '''
     See get_training_model
     :param imszuse:
@@ -247,6 +305,7 @@ def get_testing_model(imszuse, nPAFstg=5, nMAPstg=1, nlimbsT2=38, npts=19, fullp
     xpaflist = []
     xstagein = vggF
     for iPAFstg in range(nPAFstg):
+        # Using None for wd_kernel is nonsensical but shouldn't hurt in test mode
         xstageout = stageCNN(xstagein, nlimbsT2, 'paf', iPAFstg, None)
         xpaflist.append(xstageout)
         xstagein = Concatenate(name="paf-stg{}".format(iPAFstg))([vggF, xstageout])
@@ -254,19 +313,28 @@ def get_testing_model(imszuse, nPAFstg=5, nMAPstg=1, nlimbsT2=38, npts=19, fullp
     # MAP
     xmaplist = []
     for iMAPstg in range(nMAPstg):
+        # Using None for wd_kernel is nonsensical but shouldn't hurt in test mode
         xstageout = stageCNN(xstagein, npts, 'map', iMAPstg, None)
         xmaplist.append(xstageout)
         xstagein = Concatenate(name="map-stg{}".format(iMAPstg))([vggF, xpaflist[-1], xstageout])
+
+    xmaplistDC = []
+    if doDC:
+        # xstagein is ready/good from MAP loop
+        xstageout = stageCNNwithDeconv(xstagein, npts, 'map', nMAPstg, None, ndeconvs=nDC)
+        xmaplistDC.append(xstageout)
 
     assert len(xpaflist) == nPAFstg
     assert len(xmaplist) == nMAPstg
 
     if fullpred:
-        outputs = xpaflist + xmaplist
-        model = Model(inputs=[img_input], outputs=outputs)
+        outputs = xpaflist + xmaplist + xmaplistDC
+    elif doDC:
+        outputs = [xpaflist[-1], xmaplistDC[-1], ]
     else:
         outputs = [xpaflist[-1], xmaplist[-1], ]
-        model = Model(inputs=[img_input], outputs=outputs)
+
+    model = Model(inputs=[img_input], outputs=outputs)
 
     return model
 
@@ -354,13 +422,15 @@ def training(conf, name='deepnet'):
         pickle.dump(conf, td_file, protocol=2)
     logging.info('Saved config to {}'.format(train_data_file))
 
-    model_file = os.path.join(conf.cachedir, conf.expname + '_' + name + '-{epoch:d}')
+    #model_file = os.path.join(conf.cachedir, conf.expname + '_' + name + '-{epoch:d}')
     model = get_training_model(imszuse,
                                conf.op_weight_decay_kernel,
                                nPAFstg=conf.op_paf_nstage,
                                nMAPstg=conf.op_map_nstage,
                                nlimbsT2=len(conf.op_affinity_graph) * 2,
-                               npts=conf.n_classes)
+                               npts=conf.n_classes,
+                               doDC=conf.op_hires,
+                               nDC=conf.op_hires_ndeconv)
 
     logging.info("Loading vgg19 weights...")
     from_vgg = op2.from_vgg
@@ -378,7 +448,11 @@ def training(conf, name='deepnet'):
 
     assert conf.op_label_scale == 8
     logging.info("Your label_blur_rad is {}".format(conf.label_blur_rad))
-    losses, loss_weights = configure_losses(model, batch_size)
+    losses, loss_weights, loss_weights_vec = \
+        configure_losses(model, batch_size,
+                         dc_on=conf.op_hires,
+                         dc_blur_rad_ratio=conf.op_map_hires_blur_rad / conf.op_map_lores_blur_rad,
+                         dc_wtfac=2.5)
 
     def lr_decay(epoch):  # epoch is 0-based
         initial_lrate = base_lr
@@ -412,23 +486,33 @@ def training(conf, name='deepnet'):
             val_loss_full = self.model.evaluate(val_x, val_y, batch_size=batch_size, verbose=0)
             val_loss_K = val_loss_full[0]  # want Py 3 unpack
             val_loss_full = val_loss_full[1:]
-            #val_loss = dot(val_loss_full, loss_weights_vec)
-            val_loss = np.nan
+            val_loss = dot(val_loss_full, loss_weights_vec)
+            #val_loss = np.nan
             train_x, train_y = self.train_di.next()
             train_out = self.model.predict(train_x, batch_size=batch_size)
             train_loss_full = self.model.evaluate(train_x, train_y, batch_size=batch_size, verbose=0)
             train_loss_K = train_loss_full[0]  # want Py 3 unpack
             train_loss_full = train_loss_full[1:]
-            # train_loss = dot(train_loss_full, loss_weights_vec)
-            train_loss = np.nan
+            train_loss = dot(train_loss_full, loss_weights_vec)
+            #train_loss = np.nan
             lr = K.eval(self.model.optimizer.lr)
 
-            # dist only for last layer
-            tt1 = PoseTools.get_pred_locs(val_out[-1]) - \
-                  PoseTools.get_pred_locs(val_y[-1])
+            # dist only for last MAP layer (will be hi-res if deconv is on)
+            predhmval = val_out[-1]
+            predhmval = clip_heatmap_with_warn(predhmval)
+            # (bsize, npts, 2), (x,y), 0-based
+            predlocsval = heatmap.get_weighted_centroids(predhmval,
+                                                         floor=self.config.op_hmpp_floor,
+                                                         nclustermax=self.config.op_hmpp_nclustermax)
+            gtlocs = heatmap.get_weighted_centroids(val_y[-1],
+                                                    floor=self.config.op_hmpp_floor,
+                                                    nclustermax=self.config.op_hmpp_nclustermax)
+            tt1 = predlocsval - gtlocs
             tt1 = np.sqrt(np.sum(tt1 ** 2, 2))  # [bsize x ncls]
             val_dist = np.nanmean(tt1)  # this dist is in op_scale-downsampled space
                                         # *self.config.op_label_scale
+
+            # NOTE train_dist uses argmax
             tt1 = PoseTools.get_pred_locs(train_out[-1]) - \
                   PoseTools.get_pred_locs(train_y[-1])
             tt1 = np.sqrt(np.sum(tt1 ** 2, 2))
@@ -509,6 +593,25 @@ def training(conf, name='deepnet'):
     model.save(str(os.path.join(conf.cachedir, name + '-{}'.format(int(max_iter*iterations_per_epoch)))))
     obs.on_epoch_end(max_iter-1)
 
+def clip_heatmap_with_warn(predhm):
+    '''
+
+    :param predhm:
+    :return: clipped predhm; could be same array as predhm if no change
+    '''
+
+    if np.any(predhm < 0.0):
+        PTILES = [1, 5, 10, 50, 99]
+        ptls = np.percentile(predhm, PTILES)
+        warnstr = 'Prediction heatmap has negative els! PTILES {}: {}'.format(PTILES, ptls)
+        logging.warning(warnstr)
+
+        predhm_clip = predhm.copy()
+        predhm_clip[predhm_clip < 0.0] = 0.0
+    else:
+        predhm_clip = predhm
+
+    return predhm_clip
 
 def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
     (imnr, imnc) = conf.imsz
@@ -522,6 +625,8 @@ def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
                               nMAPstg=conf.op_map_nstage,
                               nlimbsT2=len(conf.op_affinity_graph) * 2,
                               npts=conf.n_classes,
+                              doDC=conf.op_hires,
+                              nDC=conf.op_hires_ndeconv,
                               fullpred=rawpred)
     if model_file is None:
         latest_model_file = PoseTools.get_latest_model_file_keras(conf, name)
@@ -560,17 +665,7 @@ def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
         #     infered = do_inference(model_preds[-1][ex,...],model_preds[-2][ex,...],conf, thre1, thre2)
         #     all_infered.append(infered)
         predhm = model_preds[-1]  # this is always the last/final MAP hmap
-
-        if np.any(predhm < 0.0):
-            PTILES = [1, 5, 10, 50, 99]
-            ptls = np.percentile(predhm, PTILES)
-            warnstr = 'Prediction heatmap has negative els! PTILES {}: {}'.format(PTILES, ptls)
-            logging.warning(warnstr)
-
-            predhm_clip = predhm.copy()
-            predhm_clip[predhm_clip < 0.0] = 0.0
-        else:
-            predhm_clip = predhm
+        predhm_clip = clip_heatmap_with_warn(predhm)
 
         # (bsize, npts, 2), (x,y), 0-based
         predlocs_argmax = PoseTools.get_pred_locs(predhm)
@@ -581,8 +676,13 @@ def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
         assert predlocs_wgtcnt.shape == locs_sz
         print "HMAP POSTPROC, floor={}, nclustermax={}".format(conf.op_hmpp_floor, conf.op_hmpp_nclustermax)
 
-        predlocs_argmax_hires = opdata.unscale_points(predlocs_argmax, conf.op_label_scale)
-        predlocs_wgtcnt_hires = opdata.unscale_points(predlocs_wgtcnt, conf.op_label_scale)
+        unscalefac = conf.op_label_scale
+        if conf.op_hires:
+            unscalefac = unscalefac / 2**conf.op_hires_ndeconv
+        assert predhm_clip.shape[1] == imnr_use / unscalefac
+        assert predhm_clip.shape[2] == imnc_use / unscalefac
+        predlocs_argmax_hires = opdata.unscale_points(predlocs_argmax, unscalefac)
+        predlocs_wgtcnt_hires = opdata.unscale_points(predlocs_wgtcnt, unscalefac)
 
         assert conf.op_rescale == 1  # we are not rescaling by this
 

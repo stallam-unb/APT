@@ -76,6 +76,9 @@ class config(object):
         self.op_paf_lores_tubewidth = 0.95
         self.op_paf_nstage = 5
         self.op_map_nstage = 1
+        self.op_hires = True
+        self.op_hires_ndeconv = 2
+        self.op_map_hires_blur_rad = 2.0
         self.op_base_lr = 4e-5  # Gines 5e-5
         self.op_weight_decay_kernel = 5e-4
         self.op_hmpp_floor = 0.1
