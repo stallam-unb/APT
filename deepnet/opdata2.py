@@ -13,7 +13,6 @@ import heatmap
 
 ISPY3 = sys.version_info >= (3, 0)
 
-
 def create_affinity_labels(locs, imsz, graph, tubewidth=1.0):
     """
     Create/return part affinity fields
@@ -222,7 +221,8 @@ def data_generator(conf, db_type, distort, shuffle, debug=False):
         label_map_lores = heatmap.create_label_hmap(locs_lores, imsz_lores, conf.op_map_lores_blur_rad)
         label_map_hires = heatmap.create_label_hmap(locs_hires, imsz_hires, conf.op_map_hires_blur_rad)
 
-        label_paf_lores = create_affinity_labels(locs_lores, imsz_lores, conf.op_affinity_graph,
+        label_paf_lores = create_affinity_labels(locs_lores, imsz_lores,
+                                                 conf.op_affinity_graph,
                                                  tubewidth=conf.op_paf_lores_tubewidth)
 
         npafstg = conf.op_paf_nstage
@@ -236,9 +236,6 @@ def data_generator(conf, db_type, distort, shuffle, debug=False):
         else:
             yield [ims], targets
             # (inputs, targets)
-
-
-
 
 if __name__ == "__main__":
 

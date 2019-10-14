@@ -32,6 +32,7 @@ import logging
 from time import time
 import cv2
 from past.utils import old_div
+import matplotlib.pyplot as plt
 
 import opdata2 as opdata
 import heatmap
@@ -264,30 +265,6 @@ def stageCNNwithDeconv(x, nfout, stagety, stageidx, wd_kernel,
     x = prelu(x, "{}-stg{}-postDC-1by1-2-prelu".format(stagety, stageidx))
     return x
 
-'''
-def stageTdeconv_block(x, num_p, stage, branch, weight_decay, weight_decay_dc, weight_decay_mode):
-    x = conv(x, 128, 7, "Mconv1_stage%d_L%d" % (stage, branch), (weight_decay, 0))
-    x = relu(x)
-    x = conv(x, 128, 7, "Mconv2_stage%d_L%d" % (stage, branch), (weight_decay, 0))
-    x = relu(x)
-    #x = deconv_2x(x, 128, 4, "Mdeconv3_stage%d_L%d" % (stage, branch), (weight_decay, 0))
-    x = deconv_2x_upsampleinit(x, 128, 4, "Mdeconv3_stage%d_L%d" % (stage, branch),
-                               (weight_decay_dc, 0), weight_decay_mode)
-    x = relu(x)
-    #x = deconv_2x(x, 128, 4, "Mdeconv4_stage%d_L%d" % (stage, branch), (weight_decay, 0))
-    x = deconv_2x_upsampleinit(x, 128, 4, "Mdeconv4_stage%d_L%d" % (stage, branch),
-                               (weight_decay_dc, 0), weight_decay_mode)
-    x = relu(x)
-    #x = deconv_2x(x, 128, 4, "Mdeconv5_stage%d_L%d" % (stage, branch), (weight_decay, 0))
-    x = deconv_2x_upsampleinit(x, 128, 4, "Mdeconv5_stage%d_L%d" % (stage, branch),
-                               (weight_decay_dc, 0), weight_decay_mode)
-    x = relu(x)
-    x = conv(x, 128, 1, "Mconv6_stage%d_L%d" % (stage, branch), (weight_decay, 0))
-    x = relu(x)
-    x = conv(x, num_p, 1, "Mconv7_stage%d_L%d" % (stage, branch), (weight_decay, 0))
-    return x
-'''
-
 def apply_mask(x, mask, stage, branch):
     w_name = "weight_stage%d_L%d" % (stage, branch)
     w = Multiply(name=w_name)([x, mask])  # vec_weight
@@ -433,7 +410,7 @@ def configure_losses(model, bsize, dc_on=True, dcNum=None, dc_blur_rad_ratio=Non
     return losses, loss_weights, loss_weights_vec
 
 def get_testing_model(imszuse,
-                      backbone='vgg',
+                      backbone='resnet50_8px',
                       nPAFstg=5, nMAPstg=1, nlimbsT2=38, npts=19,
                       doDC=True, nDC=2, fullpred=False):
     '''
@@ -468,10 +445,12 @@ def get_testing_model(imszuse,
     elif backbone == 'resnet50_8px':
         #imszBB = (imnruse / 8, imncuse / 8)
         #inputshape = img_normalized.shape.as_list()[1:]
-        backboneF = imagenet_resnet.ResNet50_8px(include_top=False,
-                                                 weights=None,
-                                                 input_tensor=img_normalized,
-                                                 pooling=None)
+        backboneMdl = imagenet_resnet.ResNet50_8px(include_top=False,
+                                                   weights=None,
+                                                   input_tensor=img_normalized,
+                                                   pooling=None)
+        backboneF = backboneMdl.output
+
     else:
         assert False, "Unrecognized backbone: {}".format(backbone)
 
@@ -822,10 +801,17 @@ def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
     # thre1 = conf.get('op_param_hmap_thres',0.1)
     # thre2 = conf.get('op_param_paf_thres',0.05)
 
-    def pred_fn(all_f):
+    def pred_fn(all_f, retrawpred=rawpred):
+        '''
+
+        :param all_f: must have precisely 3 chans (if b/w, already tiled)
+        :param rawpred: bool flag
+        :return:
+        '''
 
         assert conf.op_rescale == 1  # for now
         assert all_f.shape[0] == conf.batch_size
+        assert all_f.shape[-1] == 3, "Requires precisely 3 channels"
 
         locs_sz = (conf.batch_size, conf.n_classes, 2)
 
@@ -840,11 +826,11 @@ def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
 
         ims = ims[:, 0:imnr_use, 0:imnc_use, :]
 
-        assert conf.img_dim == ims.shape[-1]
-        if conf.img_dim == 1:
-            ims = np.tile(ims, 3)
-
         model_preds = model.predict(ims)
+
+        if retrawpred:
+            return model_preds
+
         # all_infered = []
         # for ex in range(xs.shape[0]):
         #     infered = do_inference(model_preds[-1][ex,...],model_preds[-2][ex,...],conf, thre1, thre2)
@@ -883,35 +869,10 @@ def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
         ret_dict['conf_unet'] = np.max(predhm, axis=(1, 2)) # XXX hack
         return ret_dict
 
-    # def pred_fn_rawmaps(all_f):
-    #     all_f = all_f[:, 0:imnr_use, 0:imnc_use, :]
-    #
-    #     if all_f.shape[3] == 1:
-    #         all_f = np.tile(all_f,[1,1,1,3])
-    #     # tiling beforehand a little weird as preprocess_ims->normalizexyxy branches on
-    #     # if img is color
-    #     xs, _ = PoseTools.preprocess_ims(
-    #         all_f, in_locs=np.zeros([conf.batch_size, conf.n_classes, 2]), conf=conf,
-    #         distort=False, scale=conf.op_rescale)
-    #     model_preds = model.predict(xs)
-    #     # all_infered = []
-    #     # for ex in range(xs.shape[0]):
-    #     #     infered = do_inference(model_preds[-1][ex,...],model_preds[-2][ex,...],conf, thre1, thre2)
-    #     #     all_infered.append(infered)
-    #     return model_preds
-
-
     def close_fn():
         K.clear_session()
-        # gc.collect()
-        # del model
 
-    if rawpred:
-        assert False, "unsupported"
-        return pred_fn_rawmaps, close_fn, latest_model_file
-    else:
-        return pred_fn, close_fn, latest_model_file
-
+    return pred_fn, close_fn, latest_model_file
 
 def do_inference(hmap, paf, conf, thre1, thre2):
     all_peaks = []
@@ -1104,7 +1065,6 @@ def do_inference(hmap, paf, conf, thre1, thre2):
     mappings -= conf.op_label_scale/4 # For some reason, cv2.imresize maps (x,y) to (8*x+4,8*y+4). sigh.
     return mappings
 
-
 def model_files(conf, name):
     latest_model_file = PoseTools.get_latest_model_file_keras(conf, name)
     if latest_model_file is None:
@@ -1112,3 +1072,48 @@ def model_files(conf, name):
     traindata_file = PoseTools.get_train_data_file(conf, name)
     return [latest_model_file, traindata_file + '.json']
 
+def pafhm_prog_viz(pafhm,
+                   theta_mag=False,
+                   ilimb=0,
+                   ibatch=0,
+                   figsz=(1400,1800),
+                   figfaceclr=(0.5,0.5,0.5)):
+    '''
+
+    :param pafhm: list of PAF heatmaps
+    :param theta_mag: if True, plot theta/magnitude instead of x/y
+    :param ilimb: limb index
+    :param ibatch: batch index to show
+    :param figsz:
+    :param figfaceclr:
+    :return:
+    '''
+
+    nstg = len(pafhm)
+
+    f, ax = plt.subplots(2, nstg)
+    m = plt.get_current_fig_manager()
+    m.resize(*figsz)
+    f.set_facecolor(figfaceclr)
+
+    for istg in range(nstg):
+        ilimbx = 2*ilimb
+        ilimby = 2*ilimb+1
+        hmx = pafhm[istg][ibatch, :, :, ilimbx]
+        hmy = pafhm[istg][ibatch, :, :, ilimby]
+        if theta_mag:
+            hm1 = np.arctan2(hmy, hmx)
+            hm1 = hm1/np.pi*180.
+            hm2 = np.sqrt( hmx**2 + hmy**2 )
+        else:
+            hm1 = hmx
+            hm2 = hmy
+
+        plt.axes(ax[0, istg])
+        plt.cla()
+        plt.imshow(hm1)
+        plt.colorbar()
+        plt.axes(ax[1, istg])
+        plt.cla()
+        plt.imshow(hm2)
+        plt.colorbar()
