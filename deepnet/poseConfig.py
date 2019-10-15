@@ -75,7 +75,10 @@ class config(object):
         self.op_backbone = 'resnet50_8px'
         self.op_backbone_weights = 'imagenet'
         self.op_map_lores_blur_rad = 1.0
-        self.op_paf_lores_tubewidth = 0.95
+        self.op_paf_lores_tubewidth = 0.95 # not used if tubeblur=True
+        self.op_paf_lores_tubeblur = True
+        self.op_paf_lores_tubeblursig = 0.95
+        self.op_paf_lores_tubeblurclip = 0.05
         self.op_paf_nstage = 5
         self.op_map_nstage = 1
         self.op_hires = True

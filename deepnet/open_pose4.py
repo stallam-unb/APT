@@ -1077,7 +1077,7 @@ def pafhm_prog_viz(pafhm,
                    ilimb=0,
                    ibatch=0,
                    figsz=(1400,1800),
-                   figfaceclr=(0.5,0.5,0.5)):
+                   figfaceclr=(0.5, 0.5, 0.5)):
     '''
 
     :param pafhm: list of PAF heatmaps
@@ -1091,7 +1091,7 @@ def pafhm_prog_viz(pafhm,
 
     nstg = len(pafhm)
 
-    f, ax = plt.subplots(2, nstg)
+    f, ax = plt.subplots(2, nstg, squeeze=False)
     m = plt.get_current_fig_manager()
     m.resize(*figsz)
     f.set_facecolor(figfaceclr)
@@ -1104,7 +1104,7 @@ def pafhm_prog_viz(pafhm,
         if theta_mag:
             hm1 = np.arctan2(hmy, hmx)
             hm1 = hm1/np.pi*180.
-            hm2 = np.sqrt( hmx**2 + hmy**2 )
+            hm2 = np.sqrt(hmx**2 + hmy**2)
         else:
             hm1 = hmx
             hm2 = hmy

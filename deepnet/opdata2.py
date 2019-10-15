@@ -13,7 +13,43 @@ import heatmap
 
 ISPY3 = sys.version_info >= (3, 0)
 
-def create_affinity_labels(locs, imsz, graph, tubewidth=1.0):
+def distsquaredpts2limb(zz, startxy, sehat):
+    '''
+    compute squared distance from pt to line
+
+    :param zz: (2,n) array of coords (float type)
+    :param startxy: (2,) array of starting pt in limb
+    :param sehat: (2) unit vec pointing from limb0 to limb1
+
+    :return: zzdist1 (2,n) array of squared distance from zz to line thru limb
+    '''
+    zzrel = zz - startxy[:, np.newaxis]
+    zzrelmag2 = zzrel[0, :] ** 2 + zzrel[1, :] ** 2
+    # zzrel dot startendhat
+    zzrelmag2along = np.square(zzrel[0, :]*sehat[0] + zzrel[1, :]*sehat[1])
+    zzdist2 = zzrelmag2 - zzrelmag2along
+    return zzdist2
+
+
+def distsquaredpts2limb2(zz, xs, ys, xe, ye, dse2):
+    '''
+    Prob better (numerically) version of distsquaredpts2limb
+    xs, ys, xe, ye: x/ystart, x/yend
+    dse2: (xe-xs)**2 + (ye-ys)**2
+    '''
+
+    assert zz.shape[0] == 2
+
+    num = (ye - ys)*zz[0, :] - (xe - xs)*zz[1, :] + xe*ys - ye*xs
+    zzdist2 = np.square(num) / dse2
+    return zzdist2
+
+
+def create_affinity_labels(locs, imsz, graph,
+                           tubewidth=1.0,
+                           tubeblur=False,
+                           tubeblursig=None,
+                           tubeblurclip=0.05):
     """
     Create/return part affinity fields
 
@@ -22,11 +58,30 @@ def create_affinity_labels(locs, imsz, graph, tubewidth=1.0):
     imsz: [2] (nr, nc) size of affinity maps to create/return
 
     graph: (nlimb) array of 2-element tuples; connectivity/skeleton
-    tubewidth: width of "limb". *Warning* maybe don't choose tubewidth exactly equal to 1.0
+    tubewidth: width of "limb". 
+               - if tubeBlurred=False, the tube has "hard" edges with width==tubewidth.
+                 *Warning* maybe don't choose tubewidth exactly equal to 1.0 in this case.
+               - if tubeBlurred=True, then the tube has a clipped gaussian perpendicular
+                 xsection. The stddev of this gaussian is tubeblursig. The tails of the
+                 gaussian are clipped at tubeblurclip. 
+                 
+    In all cases the paf amplitude is in [0,1] ie the tube maximum is at y=1.
 
     returns (nbatch x imsz[0] x imsz[1] x nlimb*2) paf hmaps.
         4th dim ordering: limb1x, limb1y, limb2x, limb2y, ...
     """
+
+    if tubeblur:
+        # tubewidth ignored, tubeblursig must be set
+        assert tubeblursig is not None, "tubeblursig must be set"
+        # tube radius (squared) corresponding to clip limit tubeblurblip
+        tuberadsq = -2.0 * tubeblursig**2 * np.log(tubeblurclip)
+        tuberad = np.sqrt(tuberadsq)
+        tubewidth = 2.0 * tuberad
+        # only pixels within tuberad of the limb segment will fall inside clipping range
+    else:
+        assert tubeblursig is None, "tubeblursig cannot be set"
+        tuberad = tubewidth / 2.0
 
     nlimb = len(graph)
     nbatch = locs.shape[0]
@@ -35,52 +90,67 @@ def create_affinity_labels(locs, imsz, graph, tubewidth=1.0):
 
     for cur in range(nbatch):
         for ndx, e in enumerate(graph):
+            startxy = locs[cur, e[0], :]
             start_x, start_y = locs[cur, e[0], :]
             end_x, end_y = locs[cur, e[1], :]
             assert not (np.isnan(start_x) or np.isnan(start_y) or np.isnan(end_x) or np.isnan(end_y))
             assert not (np.isinf(start_x) or np.isinf(start_y) or np.isinf(end_x) or np.isinf(end_y))
 
-            ll = np.sqrt((start_x - end_x) ** 2 + (start_y - end_y) ** 2)
+            ll2 = (start_x - end_x) ** 2 + (start_y - end_y) ** 2
+            ll = np.sqrt(ll2)
 
             if ll == 0:
                 # Can occur if start/end labels identical
                 # Don't update out/PAF
                 continue
 
-            dx = (end_x - start_x) / ll / 2
-            dy = (end_y - start_y) / ll / 2
+            costh = (end_x - start_x) / ll
+            sinth = (end_y - start_y) / ll
             zz = None
-            TUBESTEP = 0.25
-            ntubestep = int(2.0 * float(tubewidth) / TUBESTEP + 1)
-            # for delta in np.arange(-tubewidth, tubewidth, 0.25):
-            for delta in np.linspace(-tubewidth, tubewidth, ntubestep):
+            TUBESTEP = 0.25 # seems like overkill (smaller than nec)
+            ntubestep = int(np.ceil(tubewidth / TUBESTEP + 1))
+            for delta in np.linspace(-tuberad, tuberad, ntubestep):
                 # delta indicates perpendicular displacement from line/limb segment (in px)
 
-                # xx = np.round(np.linspace(start_x,end_x,6000))
-                # yy = np.round(np.linspace(start_y,end_y,6000))
-                # zz = np.stack([xx,yy])
-                xx = np.round(np.linspace(start_x + delta * dy, end_x + delta * dy, n_steps))
-                yy = np.round(np.linspace(start_y - delta * dx, end_y - delta * dx, n_steps))
+                xx = np.round(np.linspace(start_x + delta * sinth, end_x + delta * sinth, n_steps))
+                yy = np.round(np.linspace(start_y - delta * costh, end_y - delta * costh, n_steps))
                 if zz is None:
                     zz = np.stack([xx, yy])
                 else:
                     zz = np.concatenate([zz, np.stack([xx, yy])], axis=1)
-                # xx = np.round(np.linspace(start_x-dy,end_x-dy,6000))
-                # yy = np.round(np.linspace(start_y+dx,end_y+dx,6000))
-                # zz = np.concatenate([zz,np.stack([xx,yy])],axis=1)
             # zz now has all the pixels that are along the line.
             # or "tube" of width tubewidth around limb
             zz = np.unique(zz, axis=1)
             # zz now has all the unique pixels that are along the line with thickness==tubewidth.
-            dx = (end_x - start_x) / ll
-            dy = (end_y - start_y) / ll
-            for x, y in zz.T:
-                xint = int(round(x))
-                yint = int(round(y))
-                if xint < 0 or xint >= out.shape[2] or yint < 0 or yint >= out.shape[1]:
-                    continue
-                out[cur, yint, xint, ndx * 2] = dx
-                out[cur, yint, xint, ndx * 2 + 1] = dy
+            # zz shape is (2, n)
+            # zz is rounded, representing px centers; startxy is not rounded
+            if tubeblur:
+                # since zz is rounded, some points in zz may violate tubeblurclip.
+                zzdist2 = distsquaredpts2limb2(zz, start_x, start_y, end_x, end_y, ll2)
+                w = np.exp(-zzdist2/2.0/tubeblursig**2)
+                # tfwsmall = w < tubeblurclip
+                # if np.any(tfwsmall):
+                #     print "Small w vals: {}/{}".format(np.count_nonzero(tfwsmall), tfwsmall.size)
+                #     print w[tfwsmall]
+                assert zz.shape[1] == w.size
+
+                for i in range(w.size):
+                    x, y = zz[:, i]
+                    xint = int(round(x))  # should already be rounded
+                    yint = int(round(y))  # etc
+                    if xint < 0 or xint >= out.shape[2] or yint < 0 or yint >= out.shape[1]:
+                        continue
+                    out[cur, yint, xint, ndx * 2] = w[i] * costh
+                    out[cur, yint, xint, ndx * 2 + 1] = w[i] * sinth
+
+            else:
+                for x, y in zz.T:
+                    xint = int(round(x)) # already rounded?
+                    yint = int(round(y)) # etc
+                    if xint < 0 or xint >= out.shape[2] or yint < 0 or yint >= out.shape[1]:
+                        continue
+                    out[cur, yint, xint, ndx * 2] = costh
+                    out[cur, yint, xint, ndx * 2 + 1] = sinth
 
     return out
 
@@ -221,9 +291,13 @@ def data_generator(conf, db_type, distort, shuffle, debug=False):
         label_map_lores = heatmap.create_label_hmap(locs_lores, imsz_lores, conf.op_map_lores_blur_rad)
         label_map_hires = heatmap.create_label_hmap(locs_hires, imsz_hires, conf.op_map_hires_blur_rad)
 
-        label_paf_lores = create_affinity_labels(locs_lores, imsz_lores,
+        label_paf_lores = create_affinity_labels(locs_lores,
+                                                 imsz_lores,
                                                  conf.op_affinity_graph,
-                                                 tubewidth=conf.op_paf_lores_tubewidth)
+                                                 tubewidth=conf.op_paf_lores_tubewidth,
+                                                 tubeblur=conf.op_paf_lores_tubeblur,
+                                                 tubeblursig=conf.op_paf_lores_tubeblursig,
+                                                 tubeblurclip=conf.op_paf_lores_tubeblurclip)
 
         npafstg = conf.op_paf_nstage
         nmapstg = conf.op_map_nstage
@@ -256,6 +330,15 @@ if __name__ == "__main__":
 
     import nbHG
     print "OPD MAIN!"
+
+
+    locs = np.array([[5., 10.], [15., 10.], [15., 20.], [10., 15.]], np.float32)
+    locs = locs[np.newaxis, :, :]
+    affg = np.array([[0, 1], [1, 2], [1, 3]])
+    imsz = (25, 25,)
+    paf0 = create_affinity_labels(locs, imsz, affg, tubewidth=0.95)
+    paf1 = create_affinity_labels(locs, imsz, affg, tubeblur=True, tubeblursig=0.95)
+
 
     conf = nbHG.createconf(nbHG.lblbub, nbHG.cdir, 'cvi_outer3_easy__split0', 'bub', 'openpose', 0)
     #conf.op_affinity_graph = conf.op_affinity_graph[::2]
