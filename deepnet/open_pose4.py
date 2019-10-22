@@ -774,12 +774,40 @@ def clip_heatmap_with_warn(predhm):
 
     return predhm_clip
 
-def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
+def dictcompare(d1, d2, dictname):
+    nmatch = 0
+    for k in d1.keys():
+        if k in d2:
+            if np.all(d1[k] == d2[k]):
+                nmatch += 1
+            else:
+                logging.warning("key {} does not match in {}!".format(k, dictname))
+        else:
+            logging.warning("key {} is missing in second {}!".format(k, dictname))
+
+    return nmatch
+
+def get_pred_fn(conf, model_file=None, name='deepnet'):
     (imnr, imnc) = conf.imsz
     imnr_use = imszcheckcrop(imnr, 'row')
     imnc_use = imszcheckcrop(imnc, 'column')
     imszuse = (imnr_use, imnc_use)
     conf.imszuse = imszuse
+
+    # check the conf against the conf stored in the traindata w/trained model
+    # they should match
+    cdir = conf.cachedir
+    tdfile = os.path.join(cdir, 'traindata')
+    if os.path.exists(tdfile):
+        with open(tdfile) as f:
+            td = pickle.load(f)
+        conftrain = td[1]
+        logging.info("Comparing prediction config to training config within {}...".format(tdfile))
+        nmatch = dictcompare(vars(conf), vars(conftrain), 'poseconfig')
+        logging.info("... done comparing configs, {} matching keys".format(nmatch))
+    else:
+        wstr = "Cannot find traindata file {}. Not checking predict vs train config.".format(tdfile)
+        logging.warning(wstr)
 
     assert not conf.normalize_img_mean, "OP currently performs its own img input norm"
     assert not conf.normalize_batch_mean, "OP currently performs its own img input norm"
@@ -791,7 +819,7 @@ def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
                               npts=conf.n_classes,
                               doDC=conf.op_hires,
                               nDC=conf.op_hires_ndeconv,
-                              fullpred=rawpred)
+                              fullpred=conf.op_pred_raw)
     if model_file is None:
         latest_model_file = PoseTools.get_latest_model_file_keras(conf, name)
     else:
@@ -801,7 +829,7 @@ def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
     # thre1 = conf.get('op_param_hmap_thres',0.1)
     # thre2 = conf.get('op_param_paf_thres',0.05)
 
-    def pred_fn(all_f, retrawpred=rawpred):
+    def pred_fn(all_f, retrawpred=conf.op_pred_raw):
         '''
 
         :param all_f: must have precisely 3 chans (if b/w, already tiled)
@@ -811,7 +839,10 @@ def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
 
         assert conf.op_rescale == 1  # for now
         assert all_f.shape[0] == conf.batch_size
-        assert all_f.shape[-1] == 3, "Requires precisely 3 channels"
+        if all_f.shape[-1] == 1:
+            all_f = np.tile(all_f, 3)
+        else:
+            assert all_f.shape[-1] == 3, "Requires precisely 3 channels"
 
         locs_sz = (conf.batch_size, conf.n_classes, 2)
 
@@ -827,9 +858,6 @@ def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
         ims = ims[:, 0:imnr_use, 0:imnc_use, :]
 
         model_preds = model.predict(ims)
-
-        if retrawpred:
-            return model_preds
 
         # all_infered = []
         # for ex in range(xs.shape[0]):
@@ -862,11 +890,19 @@ def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
         # base_locs[nanidx] = raw_locs[nanidx]
 
         ret_dict = {}
-        ret_dict['locs'] = predlocs_wgtcnt_hires
-        ret_dict['locs_mdn'] = predlocs_argmax_hires  # XXX hack for now
-        ret_dict['locs_unet'] = predlocs_argmax_hires  # XXX hack for now
-        ret_dict['conf'] = np.max(predhm, axis=(1, 2))
-        ret_dict['conf_unet'] = np.max(predhm, axis=(1, 2)) # XXX hack
+
+        if retrawpred:
+            ret_dict['locs'] = predlocs_wgtcnt_hires
+            ret_dict['locs_argmax'] = predlocs_argmax_hires
+            ret_dict['pred_hmaps'] = model_preds
+            ret_dict['ims'] = ims
+        else:
+            ret_dict['locs'] = predlocs_wgtcnt_hires
+            ret_dict['locs_mdn'] = predlocs_argmax_hires  # XXX hack for now
+            ret_dict['locs_unet'] = predlocs_argmax_hires  # XXX hack for now
+            ret_dict['conf'] = np.max(predhm, axis=(1, 2))
+            ret_dict['conf_unet'] = np.max(predhm, axis=(1, 2))  # XXX hack
+
         return ret_dict
 
     def close_fn():

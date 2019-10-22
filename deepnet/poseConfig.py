@@ -88,6 +88,7 @@ class config(object):
         self.op_weight_decay_kernel = 5e-4
         self.op_hmpp_floor = 0.1
         self.op_hmpp_nclustermax = 1
+        self.op_pred_raw = False
         self.n_steps = 4.41
 
         # ------ Leap params
