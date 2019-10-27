@@ -3,6 +3,7 @@ import os
 import numpy as np
 import tensorflow as tf
 import logging
+import cv2
 
 import matplotlib.pyplot as plt
 from itertools import islice
@@ -80,7 +81,9 @@ def create_affinity_labels(locs, imsz, graph,
         tubewidth = 2.0 * tuberad
         # only pixels within tuberad of the limb segment will fall inside clipping range
     else:
-        assert tubeblursig is None, "tubeblursig cannot be set"
+        if tubeblursig is not None:
+            pass
+            #logging.warning('Tubeblur is False; ignoring tubeblursig value')
         tuberad = tubewidth / 2.0
 
     nlimb = len(graph)
@@ -184,7 +187,180 @@ def unscale_points(locs_lores, scale):
     locs_hires = float(scale) * (locs_lores + 0.5) - 0.5
     return locs_hires
 
-def data_generator(conf, db_type, distort, shuffle, debug=False):
+def parse_record(record, npts):
+    example = tf.train.Example()
+    example.ParseFromString(record)
+    height = int(example.features.feature['height'].int64_list.value[0])
+    width = int(example.features.feature['width'].int64_list.value[0])
+    depth = int(example.features.feature['depth'].int64_list.value[0])
+    expid = int(example.features.feature['expndx'].float_list.value[0])
+    t = int(example.features.feature['ts'].float_list.value[0])
+    img_string = example.features.feature['image_raw'].bytes_list.value[0]
+    img_1d = np.fromstring(img_string, dtype=np.uint8)
+    reconstructed_img = img_1d.reshape((height, width, depth))
+    locs = np.array(example.features.feature['locs'].float_list.value)
+    locs = locs.reshape([npts, 2])
+    if 'trx_ndx' in example.features.feature.keys():
+        trx_ndx = int(example.features.feature['trx_ndx'].int64_list.value[0])
+    else:
+        trx_ndx = 0
+    info = np.array([expid, t, trx_ndx])
+
+    return reconstructed_img, locs, info
+
+def pad_ims_blur(ims, locs, pady, padx):
+    # Similar to PoseTools.pad_ims
+
+    pady_b = pady//2 # before
+    padx_b = padx//2
+    pady_a = pady-pady_b # after
+    padx_a = padx-padx_b
+    zz = np.pad(ims, [[0, 0], [pady_b, pady_a], [padx_b, padx_a], [0, 0]], mode='edge')
+    wt_im = np.ones(ims[0, :, :, 0].shape)
+    wt_im = np.pad(wt_im, [[pady_b, pady_a], [padx_b, padx_a]], mode='linear_ramp')
+    out_ims = zz.copy()
+    for ex in range(ims.shape[0]):
+        for c in range(ims.shape[3]):
+            aa = cv2.GaussianBlur(zz[ex, :, :, c], (15, 15), 5)
+            aa = aa * (1 - wt_im) + zz[ex, :, :, c] * wt_im
+            out_ims[ex, :, :, c] = aa
+
+    out_locs = locs.copy()
+    out_locs[..., 0] += padx_b
+    out_locs[..., 1] += pady_b
+    return out_ims, out_locs
+
+def pad_ims_edge(ims, locs, pady, padx):
+    # Similar to PoseTools.pad_ims
+
+    pady_b = pady//2 # before
+    padx_b = padx//2
+    pady_a = pady-pady_b # after
+    padx_a = padx-padx_b
+    out_ims = np.pad(ims, [[0, 0], [pady_b, pady_a], [padx_b, padx_a], [0, 0]], mode='edge')
+    out_locs = locs.copy()
+    out_locs[..., 0] += padx_b
+    out_locs[..., 1] += pady_b
+    return out_ims, out_locs
+
+def pad_ims_black(ims, locs, pady, padx):
+    # Similar to PoseTools.pad_ims
+
+    pady_b = pady//2 # before
+    padx_b = padx//2
+    pady_a = pady-pady_b # after
+    padx_a = padx-padx_b
+    out_ims = np.pad(ims, [[0, 0], [pady_b, pady_a], [padx_b, padx_a], [0, 0]], mode='constant')
+    out_locs = locs.copy()
+    out_locs[..., 0] += padx_b
+    out_locs[..., 1] += pady_b
+    return out_ims, out_locs
+
+def ims_locs_preprocess_openpose(ims, locs, conf, distort):
+    '''
+    Openpose; Preprocess ims/locs; generate targets
+    :param ims:
+    :param locs:
+    :param conf:
+    :param distort:
+    :return:
+    '''
+
+    assert conf.op_rescale == 1, \
+        "Need further mods/corrections below for op_rescale~=1"
+    assert conf.op_label_scale == 8, \
+        "Expected openpose scale of 8"  # Any value should be ok tho
+
+    ims, locs = PoseTools.preprocess_ims(ims, locs, conf,
+                                         distort, conf.op_rescale)
+    # locs has been rescaled per op_rescale (but not op_label_scale)
+
+    imszuse = conf.imszuse
+    (imnr_use, imnc_use) = imszuse
+    ims = ims[:, 0:imnr_use, 0:imnc_use, :]
+
+    assert conf.img_dim == ims.shape[-1]
+    if conf.img_dim == 1:
+        ims = np.tile(ims, 3)
+
+    # locs -> PAFs, MAP
+    # Generates hires maps here but only used below if conf.op_hires
+    dc_scale = conf.op_hires_ndeconv ** 2
+    locs_lores = rescale_points(locs, conf.op_label_scale)
+    locs_hires = rescale_points(locs, conf.op_label_scale // dc_scale)
+    imsz_lores = [int(x / conf.op_label_scale / conf.op_rescale) for x in imszuse]
+    imsz_hires = [int(x / conf.op_label_scale * dc_scale / conf.op_rescale) for x in imszuse]
+    label_map_lores = heatmap.create_label_hmap(locs_lores, imsz_lores, conf.op_map_lores_blur_rad)
+    label_map_hires = heatmap.create_label_hmap(locs_hires, imsz_hires, conf.op_map_hires_blur_rad)
+
+    label_paf_lores = create_affinity_labels(locs_lores,
+                                             imsz_lores,
+                                             conf.op_affinity_graph,
+                                             tubewidth=conf.op_paf_lores_tubewidth,
+                                             tubeblur=conf.op_paf_lores_tubeblur,
+                                             tubeblursig=conf.op_paf_lores_tubeblursig,
+                                             tubeblurclip=conf.op_paf_lores_tubeblurclip)
+
+    npafstg = conf.op_paf_nstage
+    nmapstg = conf.op_map_nstage
+    targets = [label_paf_lores, ] * npafstg + [label_map_lores, ] * nmapstg
+    if conf.op_hires:
+        targets.append(label_map_hires)
+
+    return ims, locs, targets
+
+__ims_locs_preprocess_sb_has_run__ = False
+
+def ims_locs_preprocess_sb(imsraw, locsraw, conf, distort):
+    '''
+    Openpose; Preprocess ims/locs; generate targets
+    :param ims:
+    :param locs:
+    :param conf:
+    :param distort:
+    :return:
+    '''
+
+    global __ims_locs_preprocess_sb_has_run__
+
+    assert conf.sb_rescale == 1
+
+    imspp, locspp = PoseTools.preprocess_ims(imsraw, locsraw, conf, distort, conf.sb_rescale)
+    # locs has been rescaled per sb_rescale
+
+    ims, locs = pad_ims_black(imspp, locspp, conf.sb_im_pady, conf.sb_im_padx)
+    imszuse = conf.imszuse # post-pad dimensions (input to network)
+    (imnr_use, imnc_use) = imszuse
+    assert ims.shape[1] == imnr_use
+    assert ims.shape[2] == imnc_use
+    assert ims.shape[3] == conf.img_dim
+    if conf.img_dim == 1:
+        ims = np.tile(ims, 3)
+
+    locs_outres = rescale_points(locs, conf.sb_output_scale)
+    imsz_out = [int(x / conf.sb_output_scale) for x in imszuse]
+    label_map_outres = heatmap.create_label_hmap(locs_outres,
+                                                 imsz_out,
+                                                 conf.sb_blur_rad_output_res)
+    targets = [label_map_outres,]
+
+    if not __ims_locs_preprocess_sb_has_run__:
+        logging.info('sb preprocess. sb_out_scale={}, imszuse={}, imszout={}, blurradout={}'.format(conf.sb_output_scale, imszuse, imsz_out, conf.sb_blur_rad_output_res))
+        __ims_locs_preprocess_sb_has_run__ = True
+
+    return ims, locs, targets
+
+def data_generator(conf, db_type, distort, shuffle, ims_locs_proc_fn, debug=False):
+    '''
+
+    :param conf:
+    :param db_type:
+    :param distort:
+    :param shuffle:
+    :param ims_locs_proc_fn: fn(ims,locs,conf,distort) and returns ims,locs,targets
+    :param debug:
+    :return:
+    '''
     if db_type == 'val':
         filename = os.path.join(conf.cachedir, conf.valfilename) + '.tfrecords'
     elif db_type == 'train':
@@ -192,10 +368,16 @@ def data_generator(conf, db_type, distort, shuffle, debug=False):
     else:
         raise IOError('Unspecified DB Type')  # KB 20190424 - py3
 
+    isstr = isinstance(ims_locs_proc_fn, str) if ISPY3 else \
+            isinstance(ims_locs_proc_fn, basestring)
+    if isstr:
+        ims_locs_proc_fn = globals()[ims_locs_proc_fn]
+
     batch_size = conf.batch_size
-    vec_num = len(conf.op_affinity_graph)
-    heat_num = conf.n_classes
     N = PoseTools.count_records(filename)
+
+    logging.info("opdata data gen. file={}, ppfun={}, N={}".format(
+        filename, ims_locs_proc_fn.__name__, N))
 
     # Py 2.x workaround nested functions outer variable rebind
     # https://www.python.org/dev/peps/pep-3104/#new-syntax-in-the-binding-outer-scope
@@ -232,78 +414,22 @@ def data_generator(conf, db_type, distort, shuffle, debug=False):
         all_locs = []
         all_info = []
         for b_ndx in range(batch_size):
-            # AL: this 'shuffle' seems weird
+            # TODO: strange shuffle
             n_skip = np.random.randint(30) if shuffle else 0
             for _ in range(n_skip + 1):
                 record = iterator_read_next()
 
-            example = tf.train.Example()
-            example.ParseFromString(record)
-            height = int(example.features.feature['height'].int64_list.value[0])
-            width = int(example.features.feature['width'].int64_list.value[0])
-            depth = int(example.features.feature['depth'].int64_list.value[0])
-            expid = int(example.features.feature['expndx'].float_list.value[0])
-            t = int(example.features.feature['ts'].float_list.value[0])
-            img_string = example.features.feature['image_raw'].bytes_list.value[0]
-            img_1d = np.fromstring(img_string, dtype=np.uint8)
-            reconstructed_img = img_1d.reshape((height, width, depth))
-            locs = np.array(example.features.feature['locs'].float_list.value)
-            locs = locs.reshape([conf.n_classes, 2])
-            if 'trx_ndx' in example.features.feature.keys():
-                trx_ndx = int(example.features.feature['trx_ndx'].int64_list.value[0])
-            else:
-                trx_ndx = 0
-            info = np.array([expid, t, trx_ndx])
-
-            all_ims.append(reconstructed_img)
+            recon_img, locs, info = parse_record(record, conf.n_classes)
+            all_ims.append(recon_img)
             all_locs.append(locs)
             all_info.append(info)
 
-        ims = np.stack(all_ims)  # [bsize x height x width x depth]
-        locs = np.stack(all_locs)  # [bsize x ncls x 2]
+        imsraw = np.stack(all_ims)  # [bsize x height x width x depth]
+        locsraw = np.stack(all_locs)  # [bsize x ncls x 2]
         info = np.stack(all_info)  # [bsize x 3]
 
-        assert conf.op_rescale == 1, \
-            "Need further mods/corrections below for op_rescale~=1"
-        assert conf.op_label_scale == 8, \
-            "Expected openpose scale of 8"  # Any value should be ok tho
-
-        ims, locs = PoseTools.preprocess_ims(ims, locs, conf,
-                                             distort, conf.op_rescale)
-        # locs has been rescaled per op_rescale (but not op_label_scale)
-
-        imszuse = conf.imszuse
-        (imnr_use, imnc_use) = imszuse
-        ims = ims[:, 0:imnr_use, 0:imnc_use, :]
-
-        # Needed for VGG pretrained weights which expect imgdepth of 3
-        assert conf.img_dim == ims.shape[-1]
-        if conf.img_dim == 1:
-            ims = np.tile(ims, 3)
-
-        # locs -> PAFs, MAP
-        # Generates hires maps here but only used below if conf.op_hires
-        dc_scale = conf.op_hires_ndeconv**2
-        locs_lores = rescale_points(locs, conf.op_label_scale)
-        locs_hires = rescale_points(locs, conf.op_label_scale // dc_scale)
-        imsz_lores = [int(x / conf.op_label_scale / conf.op_rescale) for x in imszuse]
-        imsz_hires = [int(x / conf.op_label_scale * dc_scale / conf.op_rescale) for x in imszuse]
-        label_map_lores = heatmap.create_label_hmap(locs_lores, imsz_lores, conf.op_map_lores_blur_rad)
-        label_map_hires = heatmap.create_label_hmap(locs_hires, imsz_hires, conf.op_map_hires_blur_rad)
-
-        label_paf_lores = create_affinity_labels(locs_lores,
-                                                 imsz_lores,
-                                                 conf.op_affinity_graph,
-                                                 tubewidth=conf.op_paf_lores_tubewidth,
-                                                 tubeblur=conf.op_paf_lores_tubeblur,
-                                                 tubeblursig=conf.op_paf_lores_tubeblursig,
-                                                 tubeblurclip=conf.op_paf_lores_tubeblurclip)
-
-        npafstg = conf.op_paf_nstage
-        nmapstg = conf.op_map_nstage
-        targets = [label_paf_lores,] * npafstg + [label_map_lores,] * nmapstg
-        if conf.op_hires:
-            targets.append(label_map_hires)
+        ims, locs, targets = ims_locs_proc_fn(imsraw, locsraw, conf, distort)
+        # targets should be a list here
 
         if debug:
             yield [ims], targets, locs, info
@@ -331,7 +457,6 @@ if __name__ == "__main__":
     import nbHG
     print "OPD MAIN!"
 
-
     locs = np.array([[5., 10.], [15., 10.], [15., 20.], [10., 15.]], np.float32)
     locs = locs[np.newaxis, :, :]
     affg = np.array([[0, 1], [1, 2], [1, 3]])
@@ -339,13 +464,16 @@ if __name__ == "__main__":
     paf0 = create_affinity_labels(locs, imsz, affg, tubewidth=0.95)
     paf1 = create_affinity_labels(locs, imsz, affg, tubeblur=True, tubeblursig=0.95)
 
-
     conf = nbHG.createconf(nbHG.lblbub, nbHG.cdir, 'cvi_outer3_easy__split0', 'bub', 'openpose', 0)
     #conf.op_affinity_graph = conf.op_affinity_graph[::2]
-    conf.imszuse = (176, 176)
+    conf.imszuse = (192, 192)
+    conf.sb_im_padx = 192-181
+    conf.sb_im_pady = 192 - 181
+    conf.sb_output_scale = 2
+    conf.sb_blur_rad_output_res = 1.5
     # dst, dstmd, dsv, dsvmd = create_tf_datasets(conf)
-    ditrn = data_generator(conf, 'train', True, True, debug=True)
-    dival = data_generator(conf, 'val', False, False, debug=True)
+    ditrn = data_generator(conf, 'train', True, True, ims_locs_preprocess_sb, debug=True)
+    dival = data_generator(conf, 'val', False, False, ims_locs_preprocess_sb, debug=True)
 
     xtrn = [x for x in islice(ditrn,5)]
     xval = [x for x in islice(dival,5)]

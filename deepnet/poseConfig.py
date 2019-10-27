@@ -75,21 +75,38 @@ class config(object):
         self.op_backbone = 'resnet50_8px'
         self.op_backbone_weights = 'imagenet'
         self.op_map_lores_blur_rad = 1.0
+        self.op_map_hires_blur_rad = 2.0
         self.op_paf_lores_tubewidth = 0.95 # not used if tubeblur=True
-        self.op_paf_lores_tubeblur = True
+        self.op_paf_lores_tubeblur = False
         self.op_paf_lores_tubeblursig = 0.95
         self.op_paf_lores_tubeblurclip = 0.05
         self.op_paf_nstage = 5
         self.op_map_nstage = 1
         self.op_hires = True
         self.op_hires_ndeconv = 2
-        self.op_map_hires_blur_rad = 2.0
         self.op_base_lr = 4e-5  # Gines 5e-5
         self.op_weight_decay_kernel = 5e-4
         self.op_hmpp_floor = 0.1
         self.op_hmpp_nclustermax = 1
         self.op_pred_raw = False
         self.n_steps = 4.41
+
+        # ---
+        self.sb_rescale = 1
+        self.sb_im_pady = None  # computed at runtime
+        self.sb_im_padx = None  # "
+        self.sb_base_lr = 4e-5
+        self.sb_weight_decay_kernel = 5e-4
+        self.sb_backbone = 'ResNet50_32px'
+        self.sb_backbone_weights = 'imagenet'
+        self.sb_num_deconv = 3
+        self.sb_deconv_num_filt = 512
+        self.sb_output_scale = None  # output heatmap dims, computed at runtime
+        self.sb_upsamp_chan_handling = 'direct_deconv'  # or 'reduce_first'
+        self.sb_blur_rad_input_res = 3.0  # target hmap blur rad @ input resolution
+        self.sb_blur_rad_output_res = None  # runtime-computed
+        self.sb_hmpp_floor = 0.1
+        self.sb_hmpp_nclustermax = 1
 
         # ------ Leap params
         self.leap_net_name = "leap_cnn"

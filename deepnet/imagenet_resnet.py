@@ -315,6 +315,38 @@ def ResNet50(
         **kwargs
     )
 
+
+def ResNet50_32px(
+    include_top=False,
+    weights="imagenet",
+    input_tensor=None,
+    input_shape=None,
+    pooling=None,
+    classes=1000,
+    **kwargs
+):
+    def stack_fn(x):
+        x = stack1(x, 64, 3, stride1=1, name="conv2")
+        x = stack1(x, 128, 4, name="conv3")
+        x = stack1(x, 256, 6, name="conv4")
+        x = stack1(x, 512, 3, name="conv5")
+        return x
+
+    return ResNet(
+        stack_fn,
+        False,
+        True,
+        "resnet50",
+        include_top,
+        weights,
+        input_tensor,
+        input_shape,
+        pooling,
+        classes,
+        **kwargs
+    )
+
+
 def ResNet50_8px(
     include_top=False,
     weights="imagenet",
