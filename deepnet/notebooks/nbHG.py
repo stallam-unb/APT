@@ -21,8 +21,10 @@ import PoseTools
 
 gpu_model = 'GeForceRTX2080Ti'
 
-cdir = '/groups/branson/home/leea30/apt/openpose_refinement_20190721/cdir20191010_op3_resnet50_8px_opgraph2'
-run_dir = '/groups/branson/home/leea30/apt/openpose_refinement_20190721/out20191010_op3_resnet50_8px_opgraph2'
+root = '/groups/branson/home/leea30/apt/openpose_refinement_20190721/'
+kw = '20191027_sb_rn50_32px_nDC5_upsampdirect'
+cdir = os.path.join(root, 'cdir' + kw)
+run_dir = os.path.join(root, 'out' + kw)
 apt_deepnet_root = '/groups/branson/home/leea30/git/aptDev2/deepnet'
 
 lblbub = '/groups/branson/bransonlab/apt/experiments/data/multitarget_bubble_expandedbehavior_20180425_FxdErrs_OptoParams20181126_dlstripped.lbl'
@@ -35,6 +37,26 @@ cvishH = '/groups/branson/home/leea30/apt/openpose_refinement_20190721/cvi_sh_45
 
 op_af_graph_bub = '\(0,1\),\(0,2\),\(0,3\),\(0,4\),\(0,5\),\(5,6\),\(5,7\),\(5,9\),\(9,16\),\(9,10\),\(10,15\),\(9,14\),\(7,11\),\(7,8\),\(8,12\),\(7,13\)'
 op_af_graph_bub_2 = '\(0,1\),\(0,2\),\(0,3\),\(0,4\),\(0,5\),\(5,6\),\(5,7\),\(5,9\),\(9,16\),\(9,10\),\(10,15\),\(5,14\),\(7,11\),\(7,8\),\(8,12\),\(5,13\)'
+
+runmap = { \
+    '101rn32pxdc4dct': {'dirbase': '20191028_sb_rn101_32px_nDC4_upsampdirect', 'mdlS': 'deepnet-70000'},
+    '32pxdc3red70k': {'dirbase': '20191025_sb_rn50_32px_nDC3_reducefirst', 'mdlS':'deepnet-70000'},
+    '32pxdc3dct70k': {'dirbase': '20191025_sb_rn50_32px_nDC3_upsampdirect', 'mdlS':'deepnet-70000'},
+    '32pxdc4dct85k': {'dirbase': '20191027_sb_rn50_32px_nDC4_upsampdirect', 'mdlS':'deepnet-85000'},
+    '32pxdc4dct1024dcfilt': {'dirbase': '20191028_sb_rn50_32px_nDC4_upsampdirect_nDCfilt1024', 'mdlS':'deepnet-85000'},
+    '32pxdc5dct85k': {'dirbase': '20191027_sb_rn50_32px_nDC5_upsampdirect', 'mdlS':'deepnet-85000'},
+    '16pxdc2dct': {'dirbase': '20191028_sb_rn50_16px_nDC2_upsampdirect', 'mdlS': 'deepnet-70000'},
+    '16pxdc3dct': {'dirbase': '20191028_sb_rn50_16px_nDC3_upsampdirect', 'mdlS': 'deepnet-70000'},
+    '16pxdc4dct': {'dirbase': '20191028_sb_rn50_16px_nDC4_upsampdirect', 'mdlS': 'deepnet-70000'},
+    '8pxdc1dct': {'dirbase': '20191028_sb_rn50_8px_nDC1_upsampdirect', 'mdlS': 'deepnet-70000'},
+    '8pxdc2dct': {'dirbase': '20191028_sb_rn50_8px_nDC2_upsampdirect', 'mdlS': 'deepnet-70000'},
+    '8pxdc3dct': {'dirbase': '20191028_sb_rn50_8px_nDC3_upsampdirect', 'mdlS': 'deepnet-70000'},
+}
+for k in runmap.keys():
+    dirbase = runmap[k]['dirbase']
+    runmap[k]['cdir'] = os.path.join(root, 'cdir'+dirbase)
+    runmap[k]['odir'] = os.path.join(root, 'out'+dirbase)
+
 
 # op_af_graph_bub_debug = '\(0,1\),\(0,3\),\(0,5\),\(5,7\),\(9,16\),\(10,15\),\(7,11\),\(8,12\)'
 
@@ -118,7 +140,7 @@ def cv_train_from_mat(lbl_file, cdir, cv_info_file, models_run,
                 rapt.run_trainining(elblbubxp_name, train_type, view, run_type)
 
 
-def run_jobs(cmd_name, cur_cmd, redo=False):
+def run_jobs(cmd_name, cur_cmd, run_dir, redo=False):
 
     nowstr = datetime.datetime.now().strftime("%Y%m%dT%H%M%S%f")
     cmd_name_ts = '{}_{}'.format(cmd_name, nowstr)
@@ -144,14 +166,13 @@ def run_jobs(cmd_name, cur_cmd, redo=False):
     #     print('NOT submitting job {}'.format(cmd_name))
 
 
-def run_training(lbl_file, cdir, exp_name, data_type, train_type, view, run_type, **kwargs):
+def run_training(lbl_file, cdir, outdir, exp_name, data_type, train_type, view, run_type, **kwargs):
 
     common_cmd = 'APT_interface.py {} -name {} -cache {}'.format(lbl_file, exp_name, cdir)
     end_cmd = 'train -skip_db -use_cache'
 
     cmd_opts = {}
     cmd_opts['type'] = train_type
-    cmd_opts['view'] = view + 1
 
     conf_opts = rapt.common_conf.copy()
     # conf_opts.update(other_conf[conf_id])
@@ -231,7 +252,7 @@ def run_training(lbl_file, cdir, exp_name, data_type, train_type, view, run_type
         print cmd_name
         print cur_cmd
         print
-        run_jobs(cmd_name, cur_cmd)
+        run_jobs(cmd_name, cur_cmd, outdir)
     elif run_type == 'status':
         conf = apt.create_conf(lbl_file, view, exp_name, cdir, train_type)
         check_train_status(cmd_name, conf.cachedir)
@@ -280,7 +301,7 @@ def createconf(lbl_file, cdir, exp_name, data_type, net, view, **kwargs):
     return conf
 
 def save_cv_results(lbl_file, cachedir, view, exp_name, net, model_file_short, out_dir,
-                    data_type, kwout, mdn_hm_floor=0.1, db_file=None):
+                    data_type, kwout, mdn_hm_floor=0.1, db_file=None, **kwargs):
 
     conf_pvlist = None
     if net == 'openpose':
@@ -292,6 +313,11 @@ def save_cv_results(lbl_file, cachedir, view, exp_name, net, model_file_short, o
     return_hmaps = (net == 'mdn')
 
     conf = apt.create_conf(lbl_file, view, exp_name, cachedir, net, conf_params=conf_pvlist)
+    for k in kwargs.keys():
+        oldval = getattr(conf, k)
+        newval = kwargs[k]
+        setattr(conf, k, newval)
+        print "conf override, attr {}: old={}, new={}".format(k, oldval, newval)
     if db_file is None:
         db_file = os.path.join(conf.cachedir, 'val_TF.tfrecords')
     model_file = os.path.join(conf.cachedir, model_file_short)
@@ -503,7 +529,7 @@ def perfsinglehm(pfile, hm_nclustermax=1, hm_floor=0.1, hm_dec=100, ptiles=[50, 
 
     return (ptls, ptlshm, ntest, err, errhm, ptrk, plbl, pm, pu, pmconf, puconf, puhm)
 
-def perfsingle(pfile,ptiles=[50, 90, 97, 98, 99]):
+def perfsingle(pfile,ptiles=[50, 90, 97]):
     with open(pfile, 'r') as f:
         res = pickle.load(f)
     ptrk = res[0][0]
@@ -515,6 +541,14 @@ def perfsingle(pfile,ptiles=[50, 90, 97, 98, 99]):
     ptls = np.transpose(ptls)
     return (ptls,ntest,ptrk,plbl,err)
 
+def perfs_all(net):
+    def getperf(kw, odir):
+        pfile = os.path.join(odir, "cvi_outer3_easy__split0__vw0__{}__{}.p".format(net, kw))
+        print "perf on {}".format(pfile)
+        ptls = perfsingle(pfile)
+        return ptls
+
+    return {k:getperf(k,runmap[k]['odir'])[0] for k in runmap.keys()}
 
 def perf(out_dir, expname_pat_splits, num_splits, n_classes):
     for split in range(num_splits):
@@ -584,13 +618,15 @@ def getweightsbiases(k):
     w,b = ll.get_weights()
     return w, b
 
-def plotstuff(plotkey, tdmap=tds, marad=6):
+def plotstuff(plotkey, tdmap=tds, marad=6, ylog=False):
     fig,ax = plt.subplots(1,1)
 
     for k in tdmap.keys():
         v = tdmap[k]
         x = v['step']
         y = v[plotkey]
+        if ylog:
+            y = np.log(y)
         ys = np.convolve(y,np.ones((marad,))/float(marad),mode='valid')
         ax.plot(x[:len(ys)],ys,linewidth=2.5,label=k)
 
@@ -677,14 +713,6 @@ def track_cv_all():
         K.clear_session()
         save_cv_results(lblbub, cachedir, 0, 'cvi_outer3_easy__split0', 'openpose', mdlS, rootdir, 'bub', k)
 
-def perfs_all():
-    def getperf(k):
-        pfile = os.path.join(rootdir, "cvi_outer3_easy__split0__vw0__openpose__{}.p".format(k))
-        ptls = perfsingle(pfile)
-        return ptls
-
-    return {k:getperf(k) for k in cdirs.keys()}
-
 tdf = '/groups/branson/home/leea30/apt/openpose_refinement_20190721/cache20190811_40k_lbr3_initDCupsamp_noWD/multitarget_bubble/openpose/view_0/cvi_outer3_easy__split0/traindata'
 
 with open(tdf) as f:
@@ -759,4 +787,5 @@ mkmdlS = 'deepnet-100000'
 #                    data_type, kwout, mdn_hm_floor=0.1, db_file=None):
 
 if __name__ == "__main__":
-    track_db(lblbub, cdir, 0, 'cvi_outer3_easy__split0', 'openpose', mdlS, run_dir, 'bub', 'rn50_8px_opgraph2')
+    pass
+    #track_db(lblbub, cdir, 0, 'cvi_outer3_easy__split0', 'openpose', mdlS, run_dir, 'bub', 'rn50_8px_opgraph2')

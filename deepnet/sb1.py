@@ -177,8 +177,8 @@ def get_training_model(imszuse,
                             input_tensor=img_normalized,
                             pooling=None)
     backboneF = bb_model.output
-    print "BackBone {} with weights {} instantiated; output shape is {}".format(
-        backbone, backbone_weights, backboneF.shape.as_list()[1:])
+    logging.info("BackBone {} with weights {} instantiated; output shape is {}".format(
+        backbone, backbone_weights, backboneF.shape.as_list()[1:]))
 
     x = backboneF
 
@@ -260,11 +260,11 @@ def configure_losses(model, bsize):
     return losses, loss_weights, loss_weights_vec
 
 def get_testing_model(imszuse,
-                      nDC=2,
+                      nDC=3,
+                      dc_num_filt=256,
                       npts=19,
-                      backbone='resnet50_8px',
-                      upsamp_chan_handling='direct_deconv',
-                      fullpred=False):
+                      backbone='Resnet50_8px',
+                      upsamp_chan_handling='direct_deconv'):
     '''
     See get_training_model
     :param imszuse:
@@ -281,8 +281,9 @@ def get_testing_model(imszuse,
     assert imncuse % 32 == 0, "Image size must be divisible by 32"
 
     img_input = Input(shape=imszuse + (3,), name='input_img')
+    inputs = [img_input, ]
 
-    img_normalized = Lambda(lambda x: x / 256 - 0.5)(img_input) # [-0.5, 0.5]
+    img_normalized = Lambda(lambda x: x / 256. - 0.5)(img_input) # [-0.5, 0.5]
 
     # backbone
     bb_model_fcn = getattr(imagenet_resnet, backbone)
@@ -296,14 +297,17 @@ def get_testing_model(imszuse,
 
     x = backboneF
 
-    dc_num_filt = 256
     DCFILTSZ = 4
     if upsamp_chan_handling == 'reduce_first':
-        x = conv(x, dc_num_filt, 4, 'bb_reduce', None)
+        REDUCEFILTSZ = 1
+        x = conv(x, dc_num_filt, REDUCEFILTSZ, 'bb_reduce', None)
         for iDC in range(nDC):
             dcname = "dc-{}".format(iDC)
             x = deconv_2x_upsampleinit(x, dc_num_filt, DCFILTSZ, dcname, None, 0)
             x = prelu(x, "{}-prelu".format(dcname))
+
+        logging.info("Deconvs. Reduce first with filtsz={}. Added {} deconvs with filtsz={}, nfilt={}".format(REDUCEFILTSZ, nDC, DCFILTSZ, dc_num_filt))
+
     elif upsamp_chan_handling == 'direct_deconv':
         for iDC in range(nDC):
             dcname = "dc-{}".format(iDC)
@@ -312,19 +316,24 @@ def get_testing_model(imszuse,
                                 padding='same',
                                 name=dcname)(x)
             x = prelu(x, "{}-prelu".format(dcname))
+
+        logging.info("Deconvs. direct deconv. Added {} deconvs with filtsz={}, nfilt={}".format(nDC, DCFILTSZ, dc_num_filt))
     else:
         assert False
-    logging.info("Added {} deconvs with filtsz={}, nfilt={}".format(nDC, DCFILTSZ, dc_num_filt))
 
     #nfilt = x.shape.as_list()[-1]
     #x = conv(x, npts nf1by1, 1, "{}-stg{}-1by1-1".format(stagety, stageidx), (wd_kernel, 0))
     #x = prelu(x, "{}-stg{}-postDC-1by1-1-prelu".format(stagety, stageidx))
-    x = conv(x, npts, 1, "out-1by1", None)
+
+    x = Conv2D(npts, (1, 1),
+               padding='same',
+               name="out-1by1")(x)
+    # x = conv(x, npts, 1, "out-1by1", (wd_kernel, 0.0))
     x = prelu(x, "out-1by1-prelu")
 
     outputs = [x,]
-    model = Model(inputs=[img_input], outputs=outputs)
 
+    model = Model(inputs=inputs, outputs=outputs)
     return model
 
 
@@ -598,10 +607,25 @@ def dictcompare(d1, d2, dictname):
 
 def get_pred_fn(conf, model_file=None, name='deepnet'):
     (imnr, imnc) = conf.imsz
-    imnr_use = imszcheckcrop(imnr, 'row')
-    imnc_use = imszcheckcrop(imnc, 'column')
+    conf.sb_im_pady, imnr_use = get_im_pad(imnr, 'row')
+    conf.sb_im_padx, imnc_use = get_im_pad(imnc, 'column')
     imszuse = (imnr_use, imnc_use)
     conf.imszuse = imszuse
+    logging.info('pady/padx = {}/{}, imszuse = {}'.format(
+        conf.sb_im_pady, conf.sb_im_padx, imszuse))
+
+    assert not conf.normalize_img_mean, "SB currently performs its own img input norm"
+    assert not conf.normalize_batch_mean, "SB currently performs its own img input norm"
+    model = get_testing_model(imszuse,
+                              nDC=conf.sb_num_deconv,
+                              dc_num_filt=conf.sb_deconv_num_filt,
+                              npts=conf.n_classes,
+                              backbone=conf.sb_backbone,
+                              upsamp_chan_handling=conf.sb_upsamp_chan_handling)
+    conf.sb_output_scale = get_output_scale(model)
+    conf.sb_blur_rad_output_res = \
+        max(1.0, conf.sb_blur_rad_input_res / float(conf.sb_output_scale))
+    logging.info('Model output scale is {}, blurrad_input/output is {}/{}'.format(conf.sb_output_scale, conf.sb_blur_rad_input_res, conf.sb_blur_rad_output_res))
 
     # check the conf against the conf stored in the traindata w/trained model
     # they should match
@@ -618,17 +642,6 @@ def get_pred_fn(conf, model_file=None, name='deepnet'):
         wstr = "Cannot find traindata file {}. Not checking predict vs train config.".format(tdfile)
         logging.warning(wstr)
 
-    assert not conf.normalize_img_mean, "OP currently performs its own img input norm"
-    assert not conf.normalize_batch_mean, "OP currently performs its own img input norm"
-    model = get_testing_model(imszuse,
-                              backbone=conf.op_backbone,
-                              nPAFstg=conf.op_paf_nstage,
-                              nMAPstg=conf.op_map_nstage,
-                              nlimbsT2=len(conf.op_affinity_graph) * 2,
-                              npts=conf.n_classes,
-                              doDC=conf.op_hires,
-                              nDC=conf.op_hires_ndeconv,
-                              fullpred=conf.op_pred_raw)
     if model_file is None:
         latest_model_file = PoseTools.get_latest_model_file_keras(conf, name)
     else:
@@ -638,15 +651,14 @@ def get_pred_fn(conf, model_file=None, name='deepnet'):
     # thre1 = conf.get('op_param_hmap_thres',0.1)
     # thre2 = conf.get('op_param_paf_thres',0.05)
 
-    def pred_fn(all_f, retrawpred=conf.op_pred_raw):
+    def pred_fn(all_f):
         '''
 
-        :param all_f: must have precisely 3 chans (if b/w, already tiled)
-        :param rawpred: bool flag
+        :param all_f: raw images NHWC
         :return:
         '''
 
-        assert conf.op_rescale == 1  # for now
+        assert conf.sb_rescale == 1  # for now
         assert all_f.shape[0] == conf.batch_size
         if all_f.shape[-1] == 1:
             all_f = np.tile(all_f, 3)
@@ -655,62 +667,64 @@ def get_pred_fn(conf, model_file=None, name='deepnet'):
 
         locs_sz = (conf.batch_size, conf.n_classes, 2)
 
-        # mirror open_pose_data/DataIteratorTF
+        # mirror opdata2/data_generator, ims_locs_preprocess_sb
 
-        ims, _ = PoseTools.preprocess_ims(
+        imspp, locspp = PoseTools.preprocess_ims(
             all_f,
             in_locs=np.zeros(locs_sz),
             conf=conf,
             distort=False,
-            scale=conf.op_rescale)
+            scale=conf.sb_rescale)
 
-        ims = ims[:, 0:imnr_use, 0:imnc_use, :]
+        ims, _ = opdata.pad_ims_black(imspp, locspp, conf.sb_im_pady, conf.sb_im_padx)
+        imszuse = conf.imszuse  # post-pad dimensions (input to network)
+        (imnr_use, imnc_use) = imszuse
+        assert ims.shape[1] == imnr_use
+        assert ims.shape[2] == imnc_use
+        assert ims.shape[3] == 3
 
-        model_preds = model.predict(ims) # xxx not a list anymore
+        predhm = model.predict(ims)  # model with single output apparently not a list
 
         # all_infered = []
         # for ex in range(xs.shape[0]):
         #     infered = do_inference(model_preds[-1][ex,...],model_preds[-2][ex,...],conf, thre1, thre2)
         #     all_infered.append(infered)
-        predhm = model_preds[-1]  # this is always the last/final MAP hmap
         predhm_clip = clip_heatmap_with_warn(predhm)
 
         # (bsize, npts, 2), (x,y), 0-based
         predlocs_argmax = PoseTools.get_pred_locs(predhm)
         predlocs_wgtcnt = heatmap.get_weighted_centroids(predhm_clip,
-                                                         floor=conf.op_hmpp_floor,
-                                                         nclustermax=conf.op_hmpp_nclustermax)
+                                                         floor=conf.sb_hmpp_floor,
+                                                         nclustermax=conf.sb_hmpp_nclustermax)
         assert predlocs_argmax.shape == locs_sz
         assert predlocs_wgtcnt.shape == locs_sz
         print "HMAP POSTPROC, floor={}, nclustermax={}".format(conf.op_hmpp_floor, conf.op_hmpp_nclustermax)
 
-        unscalefac = conf.op_label_scale
-        if conf.op_hires:
-            unscalefac = unscalefac / 2**conf.op_hires_ndeconv
+        unscalefac = conf.sb_output_scale
         assert predhm_clip.shape[1] == imnr_use / unscalefac
         assert predhm_clip.shape[2] == imnc_use / unscalefac
         predlocs_argmax_hires = opdata.unscale_points(predlocs_argmax, unscalefac)
         predlocs_wgtcnt_hires = opdata.unscale_points(predlocs_wgtcnt, unscalefac)
+        # now at input, padded res
 
-        assert conf.op_rescale == 1  # we are not rescaling by this
+        # undo padding
+        predlocs_argmax_hires[..., 0] -= conf.sb_im_padx//2
+        predlocs_argmax_hires[..., 1] -= conf.sb_im_pady//2
+        predlocs_wgtcnt_hires[..., 0] -= conf.sb_im_padx//2
+        predlocs_wgtcnt_hires[..., 1] -= conf.sb_im_pady//2
+
+        assert conf.sb_rescale == 1  # we are not rescaling by this
 
         # base_locs = np.array(all_infered)*conf.op_rescale
         # nanidx = np.isnan(base_locs)
         # base_locs[nanidx] = raw_locs[nanidx]
 
         ret_dict = {}
-
-        if retrawpred:
-            ret_dict['locs'] = predlocs_wgtcnt_hires
-            ret_dict['locs_argmax'] = predlocs_argmax_hires
-            ret_dict['pred_hmaps'] = model_preds
-            ret_dict['ims'] = ims
-        else:
-            ret_dict['locs'] = predlocs_wgtcnt_hires
-            ret_dict['locs_mdn'] = predlocs_argmax_hires  # XXX hack for now
-            ret_dict['locs_unet'] = predlocs_argmax_hires  # XXX hack for now
-            ret_dict['conf'] = np.max(predhm, axis=(1, 2))
-            ret_dict['conf_unet'] = np.max(predhm, axis=(1, 2))  # XXX hack
+        ret_dict['locs'] = predlocs_wgtcnt_hires
+        ret_dict['locs_mdn'] = predlocs_argmax_hires  # XXX hack for now
+        ret_dict['locs_unet'] = predlocs_argmax_hires  # XXX hack for now
+        ret_dict['conf'] = np.max(predhm, axis=(1, 2))
+        ret_dict['conf_unet'] = np.max(predhm, axis=(1, 2))  # XXX hack
 
         return ret_dict
 
