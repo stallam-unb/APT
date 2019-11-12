@@ -164,6 +164,8 @@ def rescale_points(locs_hires, scale):
     :param locs_hires: (nbatch x npts x 2) (x,y) locs, 0-based. (0,0) is the center of the upper-left pixel.
     :param scale: downsample factor. eg if 2, the image size is cut in half
     :return: (nbatch x npts x 2) (x,y) locs, 0-based, rescaled (lo-res)
+
+    Should work fine with scale<1
     '''
 
     bsize, npts, d = locs_hires.shape
@@ -350,6 +352,84 @@ def ims_locs_preprocess_sb(imsraw, locsraw, conf, distort):
 
     return ims, locs, targets
 
+def imgaug_augment(augmenter, images, keypoints):
+    '''
+    Apply an imgaug augmenter. C+P dpk/TrainingGenerator/augment; in Py3 can prob just call meth directly
+    :param augmenter:
+    :param images: NHWC
+    :param keypoints: B x npts x 2
+    :return:
+    '''
+
+    assert images.shape[0] == keypoints.shape[0] and keypoints.shape[2] == 2
+
+    images_aug = []
+    keypoints_aug = []
+    for idx in range(images.shape[0]):
+        images_idx = images[idx, None]
+        keypoints_idx = keypoints[idx, None]
+        augmented_idx = augmenter(images=images_idx, keypoints=keypoints_idx)
+        images_aug_idx, keypoints_aug_idx = augmented_idx
+        images_aug.append(images_aug_idx)
+        keypoints_aug.append(keypoints_aug_idx)
+
+    images_aug = np.concatenate(images_aug)
+    keypoints_aug = np.concatenate(keypoints_aug)
+    return images_aug, keypoints_aug
+
+
+def ims_locs_preprocess_dpk(imsraw, locsraw, conf, distort):
+
+    #assert conf.sb_rescale == 1 We do want something like this
+
+    if distort:
+        augmenter = conf.augmenter
+        ims, locs = imgaug_augment(augmenter, imsraw, locsraw)
+        #imspp, locspp = PoseTools.preprocess_ims(imsraw, locsraw, conf, distort, conf.sb_rescale)
+        # locs has been rescaled per sb_rescale
+    else:
+        ims = imsraw
+        locs = locsraw
+
+    imszuse = conf.imszuse # post-pad dimensions (input to network)
+    (imnr_use, imnc_use) = imszuse
+    assert ims.shape[1] == imnr_use
+    assert ims.shape[2] == imnc_use
+    assert ims.shape[3] == conf.img_dim
+    #if conf.img_dim == 1:
+    #    ims = np.tile(ims, 3)
+
+    #locs_outres = rescale_points(locs, conf.sb_output_scale)
+    #imsz_out = [int(x / conf.sb_output_scale) for x in imszuse]
+    #label_map_outres = heatmap.create_label_hmap(locs_outres,
+    #                                             imsz_out,
+    #                                             conf.sb_blur_rad_output_res)
+    y = dpk.utils.keypoints.draw_confidence_maps(
+        ims,
+        locs,
+        graph=conf.dpk_graph,
+        output_shape=conf.dpk_output_shape,
+        use_graph=conf.dpk_use_graph,
+        sigma=conf.dpk_output_sigma
+    )
+    y *= 255
+    if conf.dpk_use_graph:
+        y[..., conf.n_classes:] *= conf.dpk_graph_scale  # scale grps, limbs, globals
+
+    if conf.dpk_n_outputs > 1:
+        y = [y for idx in range(conf.dpk_n_outputs)]
+
+    targets = y
+    #targets = [label_map_outres,]
+
+    #if not __ims_locs_preprocess_sb_has_run__:
+    #    logging.info('sb preprocess. sb_out_scale={}, imszuse={}, imszout={}, blurradout={}'.format(conf.sb_output_scale, imszuse, imsz_out, conf.sb_blur_rad_output_res))
+    #    __ims_locs_preprocess_sb_has_run__ = True
+
+    return ims, locs, targets
+
+
+
 def data_generator(conf, db_type, distort, shuffle, ims_locs_proc_fn, debug=False):
     '''
 
@@ -455,7 +535,7 @@ if __name__ == "__main__":
     # tf.enable_eager_execution()
 
     import nbHG
-    print "OPD MAIN!"
+    print("OPD MAIN!")
 
     locs = np.array([[5., 10.], [15., 10.], [15., 20.], [10., 15.]], np.float32)
     locs = locs[np.newaxis, :, :]
