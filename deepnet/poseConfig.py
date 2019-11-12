@@ -97,7 +97,7 @@ class config(object):
         self.sb_im_padx = None  # "
         self.sb_base_lr = 4e-5
         self.sb_weight_decay_kernel = 5e-4
-        self.sb_backbone = 'ResNet50_32px'
+        self.sb_backbone = 'ResNet50_8px'
         self.sb_backbone_weights = 'imagenet'
         self.sb_num_deconv = 3
         self.sb_deconv_num_filt = 512
