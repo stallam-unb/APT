@@ -1,3 +1,4 @@
+from __future__ import print_function
 
 ##  #######################        SETUP
 
@@ -400,8 +401,8 @@ def run_trainining(exp_name,train_type,view,run_type,**kwargs):
     cur_cmd = common_cmd + conf_str + opt_str + end_cmd
     cmd_name = '{}_view{}_{}_{}'.format(data_type, view, exp_name, train_type)
     if run_type == 'submit':
-        print cur_cmd
-        print
+        print(cur_cmd)
+        print()
         run_jobs(cmd_name, cur_cmd)
     elif run_type == 'status':
         conf = apt.create_conf(lbl_file, view, exp_name, cache_dir, train_type)
@@ -839,8 +840,8 @@ def run_cv_training(run_type='status'):
                 cur_cmd = common_cmd + conf_str + opt_str + end_cmd
                 cmd_name = '{}_view{}_{}_{}'.format(data_type, view, exp_name, train_type)
                 if run_type == 'submit':
-                    print cur_cmd
-                    print
+                    print(cur_cmd)
+                    print()
                     run_jobs(cmd_name, cur_cmd)
                 elif run_type == 'status':
                     conf = apt.create_conf(lbl_file, view, exp_name, cache_dir, train_type)
@@ -896,8 +897,8 @@ def run_dlc_augment_training(run_type = 'status'):
 
             cmd_name = '{}_view{}_{}_{}'.format(data_type,view,cmd_str[conf_id],use_round)
             if run_type == 'submit':
-                print cur_cmd
-                print
+                print(cur_cmd)
+                print()
                 run_jobs(cmd_name,cur_cmd)
             elif run_type == 'status':
                 conf = apt.create_conf(lbl_file, view, exp_name, cache_dir, train_type)
@@ -922,8 +923,8 @@ def train_deepcut_orig(run_type='status'):
                 run_dir = conf.cachedir
                 cur_cmd = dlc_cmd
 
-                print cur_cmd
-                print
+                print(cur_cmd)
+                print()
                 run_jobs(cmd_name,cur_cmd,run_dir=run_dir)
             elif run_type == 'status':
                 conf = apt.create_conf(lbl_file, view, exp_name, cache_dir, train_type)
@@ -968,8 +969,8 @@ def train_leap_orig(run_type='status',skip_db=True):
 
                 cur_cmd = 'leap/training_MK.py {}'.format(out_file)
 
-                print cur_cmd
-                print
+                print(cur_cmd)
+                print()
                 run_jobs(cmd_name,cur_cmd,run_dir=run_dir)
             elif run_type == 'status':
                 conf = apt.create_conf(lbl_file, view, exp_name, cache_dir, train_type)
@@ -1018,8 +1019,8 @@ def run_incremental_training(run_type='status'):
                 cmd_name = '{}_view{}_{}'.format(exp_name,view,train_type)
 
                 if run_type == 'submit':
-                    print cur_cmd
-                    print
+                    print(cur_cmd)
+                    print()
                     run_jobs(cmd_name,cur_cmd)
                 elif run_type == 'status':
                     conf = apt.create_conf(lbl_file, view, exp_name, cache_dir, train_type)
@@ -1073,14 +1074,17 @@ def run_single_animal_training(run_type = 'status'):
         cmd_name = '{}_view{}_{}'.format(exp_name, view, train_type)
 
         if run_type == 'submit':
-            print cur_cmd
-            print
+            print(cur_cmd)
+            print()
             run_jobs(cmd_name, cur_cmd)
 
 
 ##  ###################### GT DBs
 
 def create_gt_db():
+    exp_name = 'apt_expt'
+    train_type = 'mdn'
+
     lbl = h5py.File(lbl_file,'r')
     proj_name = apt.read_string(lbl['projname'])
     lbl.close()

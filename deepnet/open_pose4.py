@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Concatenate
 from tensorflow.keras.layers import Activation, Input, Lambda, PReLU
@@ -130,7 +132,7 @@ def upsample_filt(alg='nn', dtype=None):
 def upsample_init_value(shape, alg='nn', dtype=None):
     # Return numpy array for initialization value
 
-    print "upsample initializer desired shape, type: {}. {}".format(shape,dtype)
+    print("upsample initializer desired shape, type: {}. {}".format(shape,dtype))
     f = upsample_filt(alg, dtype)
 
     filtnr, filtnc, kout, kin = shape
@@ -320,7 +322,7 @@ def get_training_model(imszuse, wd_kernel, backbone='resnet50_8px', backbone_wei
         #map_input_shape = imszvgg + (npts,)
         backboneF = vgg_block(img_normalized, wd_kernel)
         # sz should be (bsize, imszvgg[0], imszvgg[1], nchans)
-        print backboneF.shape.as_list()[1:]
+        print(backboneF.shape.as_list()[1:])
         assert backboneF.shape.as_list()[1:] == list(imszBB + (128,))
     elif backbone == 'resnet50_8px':
         #imszBB = (imnruse / 8, imncuse / 8)
@@ -333,8 +335,8 @@ def get_training_model(imszuse, wd_kernel, backbone='resnet50_8px', backbone_wei
     else:
         assert False, "Unrecognized backbone: {}".format(backbone)
 
-    print "BackBone {} with weights {} instantiated; output shape is {}".format(
-        backbone, backbone_weights, backboneF.shape.as_list()[1:])
+    print("BackBone {} with weights {} instantiated; output shape is {}".format(
+        backbone, backbone_weights, backboneF.shape.as_list()[1:]))
 
     # PAF 1..nPAFstg
     xpaflist = []
@@ -440,7 +442,7 @@ def get_testing_model(imszuse,
         #map_input_shape = imszvgg + (npts,)
         backboneF = vgg_block(img_normalized, None)
         # sz should be (bsize, imszvgg[0], imszvgg[1], nchans)
-        print backboneF.shape.as_list()[1:]
+        print(backboneF.shape.as_list()[1:])
         assert backboneF.shape.as_list()[1:] == list(imszBB + (128,))
     elif backbone == 'resnet50_8px':
         #imszBB = (imnruse / 8, imncuse / 8)
@@ -454,8 +456,8 @@ def get_testing_model(imszuse,
     else:
         assert False, "Unrecognized backbone: {}".format(backbone)
 
-    print "BackBone {} instantiated; output shape is {}".format(
-        backbone, backboneF.shape.as_list()[1:])
+    print("BackBone {} instantiated; output shape is {}".format(
+        backbone, backboneF.shape.as_list()[1:]))
 
     # PAF 1..nPAFstg
     xpaflist = []
@@ -873,7 +875,7 @@ def get_pred_fn(conf, model_file=None, name='deepnet'):
                                                          nclustermax=conf.op_hmpp_nclustermax)
         assert predlocs_argmax.shape == locs_sz
         assert predlocs_wgtcnt.shape == locs_sz
-        print "HMAP POSTPROC, floor={}, nclustermax={}".format(conf.op_hmpp_floor, conf.op_hmpp_nclustermax)
+        print("HMAP POSTPROC, floor={}, nclustermax={}".format(conf.op_hmpp_floor, conf.op_hmpp_nclustermax))
 
         unscalefac = conf.op_label_scale
         if conf.op_hires:

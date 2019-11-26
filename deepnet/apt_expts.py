@@ -263,7 +263,7 @@ def train_theirs(args):
                     raise ValueError('Undefined net type: {}'.format(curm))
 
                 f.close()
-                os.chmod(singularity_script, 0755)
+                os.chmod(singularity_script, 0o0755)
                 cmd = '''ssh 10.36.11.34 '. /misc/lsf/conf/profile.lsf; bsub -oo {}  -n4 -gpu "num=1" -q gpu_any "singularity exec --nv /misc/local/singularity/branson_v2.simg {}"' '''.format(
                     singularity_logfile, singularity_script)  # -n4 because we use 4 preprocessing threads
                 subprocess.call(cmd, shell=True)
@@ -302,7 +302,7 @@ def train_theirs(args):
                         raise ValueError('Undefined net type: {}'.format(curm))
 
                     f.close()
-                    os.chmod(singularity_script, 0755)
+                    os.chmod(singularity_script, 0o0755)
                     cmd = '''ssh 10.36.11.34 '. /misc/lsf/conf/profile.lsf; bsub -oo {}  -n4 -gpu "num=1" -q gpu_tesla "singularity exec --nv /misc/local/singularity/branson_v2.simg {}"' '''.format(
                         singularity_logfile, singularity_script)  # -n4 because we use 4 preprocessing threads
                     subprocess.call(cmd, shell=True)
