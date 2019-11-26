@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 from keras.models import Model
 from keras.layers.merge import Concatenate
 from keras.layers import Activation, Input, Lambda, PReLU
@@ -198,7 +200,7 @@ def get_training_model(imszuse, wd_kernel, nPAFstg=5, nMAPstg=1, nlimbsT2=38, np
     # VGG
     vggF = op2.vgg_block(img_normalized, wd_kernel)
     # sz should be (bsize, imszvgg[0], imszvgg[1], nchans)
-    print vggF.shape.as_list()[1:]
+    print(vggF.shape.as_list()[1:])
     assert vggF.shape.as_list()[1:] == list(imszvgg + (128,))
 
     # PAF 1..nPAFstg
@@ -298,7 +300,7 @@ def get_testing_model(imszuse, nPAFstg=5, nMAPstg=1, nlimbsT2=38, npts=19, doDC=
     # VGG
     vggF = op2.vgg_block(img_normalized, None)
     # sz should be (bsize, imszvgg[0], imszvgg[1], nchans)
-    print vggF.shape.as_list()[1:]
+    print(vggF.shape.as_list()[1:])
     assert vggF.shape.as_list()[1:] == list(imszvgg + (128,))
 
     # PAF 1..nPAFstg
@@ -674,7 +676,7 @@ def get_pred_fn(conf, model_file=None, name='deepnet', rawpred=False):
                                                          nclustermax=conf.op_hmpp_nclustermax)
         assert predlocs_argmax.shape == locs_sz
         assert predlocs_wgtcnt.shape == locs_sz
-        print "HMAP POSTPROC, floor={}, nclustermax={}".format(conf.op_hmpp_floor, conf.op_hmpp_nclustermax)
+        print("HMAP POSTPROC, floor={}, nclustermax={}".format(conf.op_hmpp_floor, conf.op_hmpp_nclustermax))
 
         unscalefac = conf.op_label_scale
         if conf.op_hires:

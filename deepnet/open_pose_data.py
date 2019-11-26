@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import sys
 import os
 import numpy as np
@@ -339,18 +341,18 @@ def create_tf_datasets(conf):
     if False:
         return create_tfrecord_dstoy(train_db)
     else:
-        print "XXX NO SHUFFLE, NO DISTORT, was 5 and 8 parcalls"
+        print("XXX NO SHUFFLE, NO DISTORT, was 5 and 8 parcalls")
         dstrn, dstrnMD = create_tfrecord_ds(train_db, _preproc_with_distort, 5, 8, True)
         #train_ds2 = create_tfrecord_ds(train_db, _preproc_with_distort, 5, 8, True)
 
-        print "XXX was 2 and 4 parcalls"
+        print("XXX was 2 and 4 parcalls")
         dsval, dsvalMD  = create_tfrecord_ds(val_db, _preproc_no_distort, 2, 4, False)
 
         return dstrn, dstrnMD, dsval, dsvalMD
 
 def test_dataset_with_rand():
     def fn1(x):
-        print "foo"
+        print("foo")
         z = tf.random_uniform((),seed=42,name='randfoo')
         return z
 
@@ -389,7 +391,7 @@ def viz_dataset_contents(datavals, i, ibatch, op_af_graph, locvals=None, mdvals=
         info = mdvals[i]
 
     bsize = ims.shape[0]
-    print "Batch size is {}".format(bsize)
+    print("Batch size is {}".format(bsize))
 
     fig1, axs1 = plt.subplots(nrows=3, ncols=6, num=1)
     fig2, axs2 = plt.subplots(nrows=3, ncols=6, num=2)
@@ -401,11 +403,11 @@ def viz_dataset_contents(datavals, i, ibatch, op_af_graph, locvals=None, mdvals=
     plt.imshow(ims[ibatch, :, :, 0])
     if haslocs:
         plt.scatter(locs[ibatch, :, 0], locs[ibatch, :, 1], c='r', marker='.')
-        print locs[ibatch, :, :]
+        print(locs[ibatch, :, :])
     if hasmd:
         ttlstr = "{:.2f}/{:.2f}/{:.2f}".format(info[ibatch, 0], info[ibatch, 1], info[ibatch, 2])
         plt.title(ttlstr)
-        print info[ibatch, :]
+        print(info[ibatch, :])
 
     for ipt in range(17):
         plt.sca(axs1[1+ipt])
@@ -419,7 +421,7 @@ def viz_dataset_contents(datavals, i, ibatch, op_af_graph, locvals=None, mdvals=
     plt.show()
 
     nlimb = pafs.shape[3]/2
-    print "paf nlimbs={}".format(nlimb)
+    print("paf nlimbs={}".format(nlimb))
     assert nlimb == len(op_af_graph)
 
     for ilimb in range(nlimb):
@@ -648,7 +650,7 @@ if __name__ == "__main__":
     #
     # tf.enable_eager_execution()
 
-    print "OPD MAIN!"
+    print("OPD MAIN!")
 
     conf = nbHG.createconf(nbHG.lblbub, nbHG.cdir, 'cvi_outer3_easy__split0', 'bub', 'openpose', 0)
     conf.op_affinity_graph = conf.op_affinity_graph[::2]

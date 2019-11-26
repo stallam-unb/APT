@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Concatenate
 from tensorflow.keras.layers import Activation, Input, Lambda, PReLU
@@ -74,7 +76,7 @@ def upsample_filt(alg='nn', dtype=None):
 def upsample_init_value(shape, alg='nn', dtype=None):
     # Return numpy array for initialization value
 
-    print "upsample initializer desired shape, type: {}, {}".format(shape,dtype)
+    print("upsample initializer desired shape, type: {}, {}".format(shape,dtype))
     f = upsample_filt(alg, dtype)
 
     filtnr, filtnc, kout, kin = shape
@@ -292,8 +294,8 @@ def get_testing_model(imszuse,
                             input_tensor=img_normalized,
                             pooling=None)
     backboneF = bb_model.output
-    print "BackBone {} instantiated; output shape is {}".format(
-        backbone, backboneF.shape.as_list()[1:])
+    print("BackBone {} instantiated; output shape is {}".format(
+        backbone, backboneF.shape.as_list()[1:]))
 
     x = backboneF
 
@@ -698,7 +700,7 @@ def get_pred_fn(conf, model_file=None, name='deepnet'):
                                                          nclustermax=conf.sb_hmpp_nclustermax)
         assert predlocs_argmax.shape == locs_sz
         assert predlocs_wgtcnt.shape == locs_sz
-        print "HMAP POSTPROC, floor={}, nclustermax={}".format(conf.op_hmpp_floor, conf.op_hmpp_nclustermax)
+        print("HMAP POSTPROC, floor={}, nclustermax={}".format(conf.op_hmpp_floor, conf.op_hmpp_nclustermax))
 
         unscalefac = conf.sb_output_scale
         assert predhm_clip.shape[1] == imnr_use / unscalefac
