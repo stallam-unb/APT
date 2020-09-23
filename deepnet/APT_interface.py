@@ -168,6 +168,7 @@ def parse_frame_arg(framein,nMovies,defaultval):
                 frameout = [framein] * nMovies
         else:
             frameout = map(lambda x: np.Inf if (x < 0) else x,framein)
+            frameout = list(frameout)
             if len(frameout) < nMovies:
                 frameout = frameout + [defaultval]*(nMovies-len(frameout))
     assert len(frameout) == nMovies
