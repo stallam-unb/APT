@@ -5614,6 +5614,7 @@ classdef DeepTracker < LabelTracker
       obj.trkVizer.updateTrackRes(xy,tfocc);
     end
     function newLabelerTarget(obj)
+      return;
       iTgt = obj.lObj.currTarget;
       obj.trkVizer.updatePrimary(iTgt);
     end

@@ -13876,6 +13876,8 @@ classdef Labeler < handle
         'setprimarytgt',false ...
         );
       
+      return
+      
       iTgt = obj.currTarget;
       tv = obj.labeledpos2trkViz;
 
